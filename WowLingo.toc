@@ -1,0 +1,21 @@
+## Interface: 20505
+## Title: WowLingo
+## Notes: Learn languages through interactive vocabulary quizzes in-game
+## Author: WowLingo Team
+## Version: 1.0.0
+## SavedVariables: WowLingoSavedVars
+
+# Core addon initialization
+Core.lua
+
+# Language adapters
+Languages/Japanese.lua
+
+# Vocabulary data
+Data/Japanese/N5.lua
+
+# Modules (order matters - Config before others)
+Modules/Config.lua
+Modules/QuestionGenerator.lua
+Modules/UI.lua
+Modules/ConfigUI.lua
