@@ -16,7 +16,7 @@ python3 tools/convert_csv.py input.csv output.lua [language] [dataset]
 
 Example:
 ```bash
-python3 tools/convert_csv.py tools/n5.csv Data/Japanese/N5.lua Japanese N5
+python3 tools/convert_csv.py tools/n5.csv Languages/Data/Japanese/Modules/N5.lua Japanese N5
 ```
 
 CSV format: `jmdict_seq,kana,kanji,waller_definition`
@@ -38,9 +38,11 @@ Copy this repository to `World of Warcraft/_classic_/Interface/AddOns/WowLingo/`
 │   ├── UI.lua            # Main quiz frame (BackdropTemplate for TBC Classic)
 │   └── ConfigUI.lua      # Settings panel, word status management
 ├── Languages/
-│   └── Japanese.lua      # Language adapter: display types (kana/kanji), formatting
-├── Data/
-│   └── Japanese/N5.lua   # Auto-generated vocabulary (684 entries)
+│   ├── Japanese.lua      # Language adapter: display types (kana/kanji), formatting
+│   └── Data/
+│       └── Japanese/
+│           └── Modules/
+│               └── N5.lua  # Auto-generated vocabulary (684 entries)
 └── tools/                # Development utilities (not loaded by WoW)
     ├── convert_csv.py    # CSV to Lua vocabulary converter
     └── *.csv             # Source vocabulary data
@@ -76,5 +78,5 @@ WowLingoSavedVars = {
 
 **New language**:
 1. Create `Languages/NewLanguage.lua` implementing the adapter interface
-2. Create `Data/NewLanguage/` directory with vocabulary files
+2. Create `Languages/Data/NewLanguage/Modules/` directory with vocabulary files
 3. Initialize language in `Core.lua` (add to `InitializeLanguages`)

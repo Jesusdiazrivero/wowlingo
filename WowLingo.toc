@@ -12,7 +12,7 @@ Core.lua
 Languages/Japanese.lua
 
 # Vocabulary data
-Data/Japanese/N5.lua
+Languages/Data/Japanese/Modules/N5.lua
 
 # Modules (order matters - Config before others)
 Modules/Config.lua
