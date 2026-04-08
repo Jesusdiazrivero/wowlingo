@@ -14,33 +14,82 @@ DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Core.lua loading..."
 WowLingo.name = "WowLingo"
 WowLingo.version = "1.0.0"
 
--- Japanese font path (bundled Noto Sans JP)
-local JAPANESE_FONT = "Interface\\AddOns\\WowLingo\\Fonts\\NotoSansJP-Regular.ttf"
+-- ============================================================================
+-- FONT MANAGER - Dynamic font loading based on language adapters
+-- ============================================================================
 
--- Create custom font objects for Japanese text
-DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Creating Japanese font objects...")
+-- Default font path (fallback when language doesn't specify one)
+local DEFAULT_FONT = "Fonts\\FRIZQT__.TTF"
 
--- Font for normal Japanese text (size 12)
-local JapaneseFont = CreateFont("WowLingoJapaneseFont")
-JapaneseFont:SetFont(JAPANESE_FONT, 12, "")
+-- Cache for created font objects
+local fontCache = {}
 
--- Font for large Japanese text (size 16)
-local JapaneseFontLarge = CreateFont("WowLingoJapaneseFontLarge")
-JapaneseFontLarge:SetFont(JAPANESE_FONT, 16, "")
+-- Create or retrieve a font object for a language
+local function GetOrCreateFont(languageName, size, suffix)
+    local cacheKey = languageName .. "_" .. size .. (suffix or "")
 
--- Font for small Japanese text (size 10)
-local JapaneseFontSmall = CreateFont("WowLingoJapaneseFontSmall")
-JapaneseFontSmall:SetFont(JAPANESE_FONT, 10, "")
+    if fontCache[cacheKey] then
+        return fontCache[cacheKey]
+    end
 
--- Store font references in namespace for modules to use
-WowLingo.Fonts = {
-    Japanese = JapaneseFont,
-    JapaneseLarge = JapaneseFontLarge,
-    JapaneseSmall = JapaneseFontSmall,
-    path = JAPANESE_FONT,
+    -- Get font path from language adapter
+    local fontPath = DEFAULT_FONT
+    local langAdapter = WowLingo.Languages[languageName]
+    if langAdapter and langAdapter.fontPath then
+        fontPath = langAdapter.fontPath
+    end
+
+    -- Create new font object
+    local fontName = "WowLingo_" .. languageName .. "_" .. size .. (suffix or "")
+    local font = CreateFont(fontName)
+    font:SetFont(fontPath, size, "")
+
+    fontCache[cacheKey] = font
+    return font
+end
+
+-- FontManager module for external access
+WowLingo.FontManager = {
+    -- Get font for a specific language (lazy loading)
+    GetFont = function(self, languageName, size)
+        size = size or 12
+        return GetOrCreateFont(languageName, size)
+    end,
+
+    -- Get the font for the currently active language
+    GetCurrentFont = function(self, size)
+        local langName = WowLingo:GetActiveLanguageName()
+        return self:GetFont(langName, size)
+    end,
+
+    -- Convenience methods for common sizes
+    GetSmallFont = function(self, languageName)
+        return self:GetFont(languageName, 10)
+    end,
+    GetNormalFont = function(self, languageName)
+        return self:GetFont(languageName, 12)
+    end,
+    GetLargeFont = function(self, languageName)
+        return self:GetFont(languageName, 16)
+    end,
 }
 
-DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Japanese fonts created.")
+-- Legacy compatibility: WowLingo.Fonts table (populated lazily)
+WowLingo.Fonts = setmetatable({}, {
+    __index = function(t, key)
+        -- Map legacy keys to FontManager calls
+        if key == "Japanese" then
+            return WowLingo.FontManager:GetFont("Japanese", 12)
+        elseif key == "JapaneseLarge" then
+            return WowLingo.FontManager:GetFont("Japanese", 16)
+        elseif key == "JapaneseSmall" then
+            return WowLingo.FontManager:GetFont("Japanese", 10)
+        end
+        return nil
+    end
+})
+
+DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r FontManager initialized.")
 
 -- Internal state
 local isInitialized = false
@@ -112,17 +161,87 @@ eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGOUT")
 DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Events registered. Waiting for ADDON_LOADED...")
 
+-- ============================================================================
+-- DYNAMIC LANGUAGE/DATASET DISCOVERY
+-- ============================================================================
+
+-- Get the first available language from registered adapters
+function WowLingo:GetFirstAvailableLanguage()
+    for langName, _ in pairs(self.Languages) do
+        return langName
+    end
+    return nil
+end
+
+-- Get the first available dataset for a language (from WowLingo.Data)
+function WowLingo:GetFirstAvailableDataset(languageName)
+    if self.Data[languageName] then
+        for datasetName, _ in pairs(self.Data[languageName]) do
+            return datasetName
+        end
+    end
+    return nil
+end
+
+-- Get all available datasets for a language (auto-discovered from Data)
+function WowLingo:GetAvailableDatasets(languageName)
+    local datasets = {}
+    if self.Data[languageName] then
+        for datasetName, _ in pairs(self.Data[languageName]) do
+            table.insert(datasets, datasetName)
+        end
+        table.sort(datasets)  -- Consistent ordering
+    end
+    return datasets
+end
+
+-- Get the active language name (with fallback to first available)
+function WowLingo:GetActiveLanguageName()
+    local langName = WowLingoSavedVars and WowLingoSavedVars.activeLanguage
+
+    -- Validate the language exists
+    if langName and self.Languages[langName] then
+        return langName
+    end
+
+    -- Fallback to first available
+    return self:GetFirstAvailableLanguage()
+end
+
+-- Get the active dataset name (with fallback to first available)
+function WowLingo:GetActiveDatasetName()
+    local langName = self:GetActiveLanguageName()
+    local datasetName = WowLingoSavedVars and WowLingoSavedVars.activeDataset
+
+    -- Validate the dataset exists for this language
+    if datasetName and self.Data[langName] and self.Data[langName][datasetName] then
+        return datasetName
+    end
+
+    -- Fallback to first available for this language
+    return self:GetFirstAvailableDataset(langName)
+end
+
+-- ============================================================================
+-- SAVED VARIABLES INITIALIZATION
+-- ============================================================================
+
 -- Initialize SavedVariables with defaults
 function WowLingo:InitializeSavedVars()
     if not WowLingoSavedVars then
         WowLingoSavedVars = {}
     end
 
+    -- Dynamic defaults - use first available language/dataset
+    local defaultLang = self:GetFirstAvailableLanguage()
+    local defaultDataset = defaultLang and self:GetFirstAvailableDataset(defaultLang) or nil
+
     -- Set defaults if not present
     local defaults = {
-        activeLanguage = "Japanese",
-        activeDataset = "N5",
+        activeLanguage = defaultLang,
+        activeDataset = defaultDataset,
         knownWords = {},
+        enabledModules = {},  -- Tracks which language:dataset combinations are enabled
         settings = {
             questionDirection = "both",
             onlyKnownWords = true,
@@ -135,6 +254,17 @@ function WowLingo:InitializeSavedVars()
     for key, value in pairs(defaults) do
         if WowLingoSavedVars[key] == nil then
             WowLingoSavedVars[key] = value
+        end
+    end
+
+    -- Validate that saved language/dataset still exist
+    if WowLingoSavedVars.activeLanguage and not self.Languages[WowLingoSavedVars.activeLanguage] then
+        WowLingoSavedVars.activeLanguage = defaultLang
+        WowLingoSavedVars.activeDataset = defaultDataset
+    elseif WowLingoSavedVars.activeLanguage then
+        local lang = WowLingoSavedVars.activeLanguage
+        if WowLingoSavedVars.activeDataset and not (self.Data[lang] and self.Data[lang][WowLingoSavedVars.activeDataset]) then
+            WowLingoSavedVars.activeDataset = self:GetFirstAvailableDataset(lang)
         end
     end
 
@@ -151,6 +281,10 @@ function WowLingo:InitializeSavedVars()
 
     if not WowLingoSavedVars.knownWords then
         WowLingoSavedVars.knownWords = {}
+    end
+
+    if not WowLingoSavedVars.enabledModules then
+        WowLingoSavedVars.enabledModules = {}
     end
 end
 
@@ -298,19 +432,31 @@ end
 
 -- Get current language adapter
 function WowLingo:GetCurrentLanguage()
-    local langName = WowLingoSavedVars and WowLingoSavedVars.activeLanguage or "Japanese"
-    return self.Languages[langName]
+    local langName = self:GetActiveLanguageName()
+    return langName and self.Languages[langName] or nil
 end
 
 -- Get current dataset
 function WowLingo:GetCurrentDataset()
-    local langName = WowLingoSavedVars and WowLingoSavedVars.activeLanguage or "Japanese"
-    local datasetName = WowLingoSavedVars and WowLingoSavedVars.activeDataset or "N5"
+    local langName = self:GetActiveLanguageName()
+    local datasetName = self:GetActiveDatasetName()
 
-    if self.Data[langName] and self.Data[langName][datasetName] then
+    if langName and datasetName and self.Data[langName] and self.Data[langName][datasetName] then
         return self.Data[langName][datasetName]
     end
     return nil
+end
+
+-- Check if any languages/modules are available
+function WowLingo:HasAvailableModules()
+    for langName, _ in pairs(self.Languages) do
+        if self.Data[langName] then
+            for _, _ in pairs(self.Data[langName]) do
+                return true
+            end
+        end
+    end
+    return false
 end
 
 DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Core.lua finished loading. All functions defined.")

@@ -10,9 +10,11 @@ Core.lua
 
 # Language adapters
 Languages/Japanese.lua
+Languages/Spanish.lua
 
 # Vocabulary data
 Languages/Data/Japanese/Modules/N5.lua
+Languages/Data/Spanish/Modules/A1.lua
 
 # Modules (order matters - Config before others)
 Modules/Config.lua

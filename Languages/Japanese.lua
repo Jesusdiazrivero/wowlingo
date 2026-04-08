@@ -13,7 +13,18 @@ DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r Japanese.lua loaded.
 WowLingo.Languages["Japanese"] = {
     name = "Japanese",
     displayName = "Japanese (日本語)",
-    datasets = {"N5", "N4", "N3", "N2", "N1"},
+
+    -- Font configuration (optional - uses default if nil)
+    fontPath = "Interface\\AddOns\\WowLingo\\Fonts\\NotoSansJP-Regular.ttf",
+
+    -- Display types this language supports (used for tracking known words)
+    displayTypes = {"kana", "kanji"},
+
+    -- Display type labels for UI
+    displayTypeLabels = {
+        kana = "Kana",
+        kanji = "Kanji",
+    },
 
     -- Get available display forms for a vocabulary entry
     -- Returns table of display types that are available for this word
@@ -50,7 +61,7 @@ WowLingo.Languages["Japanese"] = {
 
     -- Get all display types this language supports
     getDisplayTypes = function(self)
-        return {"kana", "kanji"}
+        return self.displayTypes
     end,
 
     -- Question types supported by this language
@@ -94,5 +105,20 @@ WowLingo.Languages["Japanese"] = {
             return entry.kanji and entry.kanji ~= ""
         end
         return false
+    end,
+
+    -- Get the label for a display type
+    getDisplayTypeLabel = function(self, displayType)
+        return self.displayTypeLabels[displayType] or displayType
+    end,
+
+    -- Get the value from an entry for a display type
+    getDisplayValue = function(self, entry, displayType)
+        if displayType == "kana" then
+            return entry.kana
+        elseif displayType == "kanji" then
+            return entry.kanji
+        end
+        return nil
     end,
 }

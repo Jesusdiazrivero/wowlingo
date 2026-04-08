@@ -80,9 +80,9 @@ local function CreateAnswerButton(parent, index)
     button:SetBackdrop(GetButtonBackdrop())
     button:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 
-    -- Create text (use Japanese font for proper character display)
+    -- Create text (font will be set dynamically based on current question's language)
     button.text = button:CreateFontString(nil, "OVERLAY")
-    button.text:SetFontObject(WowLingo.Fonts.Japanese)
+    -- Font object set dynamically when question is displayed
     button.text:SetPoint("CENTER")
     button.text:SetWidth(FRAME_WIDTH - PADDING * 4)
     button.text:SetJustifyH("CENTER")
@@ -147,9 +147,9 @@ function UI:Initialize()
         UI:Hide()
     end)
 
-    -- Prompt text (question) - use large Japanese font
+    -- Prompt text (question) - font set dynamically based on current language
     promptText = quizFrame:CreateFontString(nil, "OVERLAY")
-    promptText:SetFontObject(WowLingo.Fonts.JapaneseLarge)
+    -- Font object set dynamically when question is displayed
     promptText:SetPoint("TOP", title, "BOTTOM", 0, -8)
     promptText:SetWidth(FRAME_WIDTH - PADDING * 2)
     promptText:SetJustifyH("CENTER")
@@ -228,11 +228,24 @@ function UI:NextQuestion()
 
     currentQuestion = question
 
+    -- Get fonts for the question's language
+    local langName = question.language or WowLingo:GetActiveLanguageName()
+    local promptFont = WowLingo.FontManager:GetLargeFont(langName)
+    local buttonFont = WowLingo.FontManager:GetNormalFont(langName)
+
+    -- Set fonts dynamically
+    if promptFont then
+        promptText:SetFontObject(promptFont)
+    end
+
     -- Update prompt
     promptText:SetText(question.prompt)
 
     -- Update buttons
     for i, btn in ipairs(answerButtons) do
+        if buttonFont then
+            btn.text:SetFontObject(buttonFont)
+        end
         btn.text:SetText(question.options[i])
         SetButtonColor(btn, unpack(COLOR_DEFAULT))
         btn:Enable()

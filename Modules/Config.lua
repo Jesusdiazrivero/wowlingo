@@ -26,8 +26,12 @@ end
 
 -- Ensure the data structure exists for the current language/dataset
 function Config:EnsureDataStructure()
-    local lang = WowLingoSavedVars.activeLanguage or "Japanese"
-    local dataset = WowLingoSavedVars.activeDataset or "N5"
+    local lang = WowLingo:GetActiveLanguageName()
+    local dataset = WowLingo:GetActiveDatasetName()
+
+    if not lang or not dataset then
+        return  -- No languages/datasets available
+    end
 
     if not WowLingoSavedVars.knownWords then
         WowLingoSavedVars.knownWords = {}
@@ -38,16 +42,45 @@ function Config:EnsureDataStructure()
     end
 
     if not WowLingoSavedVars.knownWords[lang][dataset] then
-        WowLingoSavedVars.knownWords[lang][dataset] = {
-            kana = {},
-            kanji = {},
-        }
+        WowLingoSavedVars.knownWords[lang][dataset] = {}
     end
 
-    -- Ensure both display types exist
-    local datasetData = WowLingoSavedVars.knownWords[lang][dataset]
-    if not datasetData.kana then datasetData.kana = {} end
-    if not datasetData.kanji then datasetData.kanji = {} end
+    -- Ensure all display types exist for this language
+    local langAdapter = WowLingo.Languages[lang]
+    if langAdapter and langAdapter.displayTypes then
+        for _, displayType in ipairs(langAdapter.displayTypes) do
+            if not WowLingoSavedVars.knownWords[lang][dataset][displayType] then
+                WowLingoSavedVars.knownWords[lang][dataset][displayType] = {}
+            end
+        end
+    end
+end
+
+-- Ensure structure exists for a specific language/dataset (used when iterating modules)
+function Config:EnsureDataStructureFor(lang, dataset)
+    if not lang or not dataset then return end
+
+    if not WowLingoSavedVars.knownWords then
+        WowLingoSavedVars.knownWords = {}
+    end
+
+    if not WowLingoSavedVars.knownWords[lang] then
+        WowLingoSavedVars.knownWords[lang] = {}
+    end
+
+    if not WowLingoSavedVars.knownWords[lang][dataset] then
+        WowLingoSavedVars.knownWords[lang][dataset] = {}
+    end
+
+    -- Ensure all display types exist for this language
+    local langAdapter = WowLingo.Languages[lang]
+    if langAdapter and langAdapter.displayTypes then
+        for _, displayType in ipairs(langAdapter.displayTypes) do
+            if not WowLingoSavedVars.knownWords[lang][dataset][displayType] then
+                WowLingoSavedVars.knownWords[lang][dataset][displayType] = {}
+            end
+        end
+    end
 end
 
 -- Get the known words table for current language/dataset/displayType
@@ -119,58 +152,88 @@ function Config:GetKnownWordIds(displayType)
     return ids
 end
 
--- Get count of known words
+-- Get count of known words (across all enabled modules)
 function Config:GetKnownCount(displayType)
     local count = 0
-    local knownTable = self:GetKnownTable(displayType)
+    local enabledModules = self:GetEnabledModules()
 
-    for _, known in pairs(knownTable) do
-        if known then
-            count = count + 1
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
+
+        local language = WowLingo.Languages[langName]
+        local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
+
+        if language and data then
+            -- Set context
+            WowLingoSavedVars.activeLanguage = langName
+            WowLingoSavedVars.activeDataset = datasetName
+            self:EnsureDataStructure()
+
+            local knownTable = self:GetKnownTable(displayType)
+            for id, entry in pairs(data) do
+                if knownTable[id] and language:hasDisplayType(entry, displayType) then
+                    count = count + 1
+                end
+            end
         end
     end
 
     return count
 end
 
--- Get total count of words that have a specific display type
+-- Get total count of words that have a specific display type (across all enabled modules)
 function Config:GetTotalCount(displayType)
-    local dataset = WowLingo:GetCurrentDataset()
-    if not dataset then return 0 end
-
-    local language = WowLingo:GetCurrentLanguage()
-    if not language then return 0 end
-
     local count = 0
-    for id, entry in pairs(dataset) do
-        if language:hasDisplayType(entry, displayType) then
-            count = count + 1
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
+
+        local language = WowLingo.Languages[langName]
+        local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
+
+        if language and data then
+            for id, entry in pairs(data) do
+                if language:hasDisplayType(entry, displayType) then
+                    count = count + 1
+                end
+            end
         end
     end
 
     return count
 end
 
--- Mark all words as known for a display type
+-- Mark all words as known for a display type (across all enabled modules)
 function Config:MarkAllKnown(displayType)
-    local dataset = WowLingo:GetCurrentDataset()
-    if not dataset then return end
+    local enabledModules = self:GetEnabledModules()
+    local markedCount = 0
 
-    local language = WowLingo:GetCurrentLanguage()
-    if not language then return end
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
 
-    self:EnsureDataStructure()
+        local language = WowLingo.Languages[langName]
+        local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
 
-    local lang = WowLingoSavedVars.activeLanguage
-    local datasetName = WowLingoSavedVars.activeDataset
+        if language and data then
+            -- Set context
+            WowLingoSavedVars.activeLanguage = langName
+            WowLingoSavedVars.activeDataset = datasetName
+            self:EnsureDataStructure()
 
-    for id, entry in pairs(dataset) do
-        if language:hasDisplayType(entry, displayType) then
-            WowLingoSavedVars.knownWords[lang][datasetName][displayType][id] = true
+            for id, entry in pairs(data) do
+                if language:hasDisplayType(entry, displayType) then
+                    WowLingoSavedVars.knownWords[langName][datasetName][displayType][id] = true
+                    markedCount = markedCount + 1
+                end
+            end
         end
     end
 
-    WowLingo:Print("Marked all " .. displayType .. " as known.")
+    WowLingo:Print("Marked " .. markedCount .. " " .. displayType .. " words as known.")
 
     -- Refresh config UI if open
     if WowLingo.ConfigUI and WowLingo.ConfigUI.RefreshList then
@@ -178,24 +241,37 @@ function Config:MarkAllKnown(displayType)
     end
 end
 
--- Reset all words to unknown for a display type (or all if nil)
+-- Reset all words to unknown for a display type (or all if nil) across all enabled modules
 function Config:ResetAll(displayType)
-    self:EnsureDataStructure()
+    local enabledModules = self:GetEnabledModules()
 
-    local lang = WowLingoSavedVars.activeLanguage
-    local dataset = WowLingoSavedVars.activeDataset
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
+
+        -- Set context
+        WowLingoSavedVars.activeLanguage = langName
+        WowLingoSavedVars.activeDataset = datasetName
+        self:EnsureDataStructureFor(langName, datasetName)
+
+        if displayType then
+            -- Reset specific display type
+            WowLingoSavedVars.knownWords[langName][datasetName][displayType] = {}
+        else
+            -- Reset all display types dynamically
+            local langAdapter = WowLingo.Languages[langName]
+            if langAdapter and langAdapter.displayTypes then
+                for _, dt in ipairs(langAdapter.displayTypes) do
+                    WowLingoSavedVars.knownWords[langName][datasetName][dt] = {}
+                end
+            end
+        end
+    end
 
     if displayType then
-        -- Reset specific display type
-        WowLingoSavedVars.knownWords[lang][dataset][displayType] = {}
-        WowLingo:Print("Reset all " .. displayType .. " progress.")
+        WowLingo:Print("Reset all " .. displayType .. " progress for enabled modules.")
     else
-        -- Reset all display types
-        WowLingoSavedVars.knownWords[lang][dataset] = {
-            kana = {},
-            kanji = {},
-        }
-        WowLingo:Print("Reset all progress for " .. lang .. " " .. dataset .. ".")
+        WowLingo:Print("Reset all progress for enabled modules.")
     end
 
     -- Refresh config UI if open
@@ -239,4 +315,192 @@ function Config:LoadFramePosition(frame, positionKey)
     end
 
     return false
+end
+
+-- ============================================================================
+-- MODULE MANAGEMENT (Languages/Datasets)
+-- ============================================================================
+
+-- Ensure enabled modules structure exists
+function Config:EnsureEnabledModulesStructure()
+    if not WowLingoSavedVars.enabledModules then
+        WowLingoSavedVars.enabledModules = {}
+    end
+end
+
+-- Get the first available module (language:dataset pair)
+function Config:GetFirstAvailableModule()
+    local lang = WowLingo:GetFirstAvailableLanguage()
+    if lang then
+        local dataset = WowLingo:GetFirstAvailableDataset(lang)
+        if dataset then
+            return lang, dataset
+        end
+    end
+    return nil, nil
+end
+
+-- Check if a specific module is enabled
+function Config:IsModuleEnabled(language, dataset)
+    self:EnsureEnabledModulesStructure()
+
+    local key = language .. ":" .. dataset
+
+    -- If enabledModules is empty, enable the first available module
+    local hasAnyEnabled = false
+    for _ in pairs(WowLingoSavedVars.enabledModules) do
+        hasAnyEnabled = true
+        break
+    end
+
+    if not hasAnyEnabled then
+        -- Default: enable first available module
+        local defaultLang, defaultDataset = self:GetFirstAvailableModule()
+        if defaultLang and defaultDataset then
+            return language == defaultLang and dataset == defaultDataset
+        end
+        return false
+    end
+
+    return WowLingoSavedVars.enabledModules[key] == true
+end
+
+-- Enable a module
+function Config:EnableModule(language, dataset)
+    self:EnsureEnabledModulesStructure()
+
+    local key = language .. ":" .. dataset
+    WowLingoSavedVars.enabledModules[key] = true
+
+    -- Also update the legacy activeLanguage/activeDataset for backwards compatibility
+    WowLingoSavedVars.activeLanguage = language
+    WowLingoSavedVars.activeDataset = dataset
+
+    WowLingo:Print("Enabled module: " .. language .. " - " .. dataset)
+end
+
+-- Disable a module
+function Config:DisableModule(language, dataset)
+    self:EnsureEnabledModulesStructure()
+
+    local key = language .. ":" .. dataset
+    WowLingoSavedVars.enabledModules[key] = nil
+
+    -- Ensure at least one module remains enabled
+    local hasAnyEnabled = false
+    for _ in pairs(WowLingoSavedVars.enabledModules) do
+        hasAnyEnabled = true
+        break
+    end
+
+    if not hasAnyEnabled then
+        -- Re-enable the first available module
+        local defaultLang, defaultDataset = self:GetFirstAvailableModule()
+        if defaultLang and defaultDataset then
+            local defaultKey = defaultLang .. ":" .. defaultDataset
+            WowLingoSavedVars.enabledModules[defaultKey] = true
+            WowLingo:Print("Cannot disable all modules. " .. defaultLang .. " " .. defaultDataset .. " re-enabled.")
+        end
+    else
+        WowLingo:Print("Disabled module: " .. language .. " - " .. dataset)
+    end
+end
+
+-- Get list of all enabled modules
+function Config:GetEnabledModules()
+    self:EnsureEnabledModulesStructure()
+
+    local modules = {}
+
+    -- Check if any modules are explicitly enabled
+    local hasAnyEnabled = false
+    for _ in pairs(WowLingoSavedVars.enabledModules) do
+        hasAnyEnabled = true
+        break
+    end
+
+    if not hasAnyEnabled then
+        -- Default: return first available module
+        local defaultLang, defaultDataset = self:GetFirstAvailableModule()
+        if defaultLang and defaultDataset then
+            table.insert(modules, {
+                language = defaultLang,
+                dataset = defaultDataset,
+            })
+        end
+        return modules
+    end
+
+    for key, enabled in pairs(WowLingoSavedVars.enabledModules) do
+        if enabled then
+            local lang, dataset = key:match("^(.+):(.+)$")
+            if lang and dataset then
+                -- Verify the module still exists (data might have been removed)
+                if WowLingo.Data[lang] and WowLingo.Data[lang][dataset] then
+                    table.insert(modules, {
+                        language = lang,
+                        dataset = dataset,
+                    })
+                end
+            end
+        end
+    end
+
+    return modules
+end
+
+-- Get total word count across all enabled modules
+function Config:GetTotalWordCount()
+    local count = 0
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local data = WowLingo.Data[moduleInfo.language]
+        if data and data[moduleInfo.dataset] then
+            for _ in pairs(data[moduleInfo.dataset]) do
+                count = count + 1
+            end
+        end
+    end
+
+    return count
+end
+
+-- Get display types for a specific language
+function Config:GetDisplayTypesForLanguage(languageName)
+    local langAdapter = WowLingo.Languages[languageName]
+    if langAdapter and langAdapter.displayTypes then
+        return langAdapter.displayTypes
+    end
+    return {}
+end
+
+-- Get display type label for a language
+function Config:GetDisplayTypeLabel(languageName, displayType)
+    local langAdapter = WowLingo.Languages[languageName]
+    if langAdapter and langAdapter.getDisplayTypeLabel then
+        return langAdapter:getDisplayTypeLabel(displayType)
+    end
+    return displayType
+end
+
+-- Get all unique display types across all enabled modules
+function Config:GetAllDisplayTypes()
+    local displayTypes = {}
+    local seen = {}
+
+    local enabledModules = self:GetEnabledModules()
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langAdapter = WowLingo.Languages[moduleInfo.language]
+        if langAdapter and langAdapter.displayTypes then
+            for _, dt in ipairs(langAdapter.displayTypes) do
+                if not seen[dt] then
+                    table.insert(displayTypes, dt)
+                    seen[dt] = true
+                end
+            end
+        end
+    end
+
+    return displayTypes
 end

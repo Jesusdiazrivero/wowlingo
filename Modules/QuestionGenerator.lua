@@ -1,6 +1,7 @@
 --[[
     WowLingo - Question Generator Module
     Creates quiz questions with random distractors
+    Supports pulling questions from multiple enabled modules
 ]]
 
 DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r QuestionGenerator.lua loading...")
@@ -22,37 +23,65 @@ local function shuffle(tbl)
     return tbl
 end
 
--- Get a random element from a table (works with both array and hash tables)
-local function getRandomFromTable(tbl, excludeIds)
-    excludeIds = excludeIds or {}
+-- Build a combined pool of all words from enabled modules
+local function buildWordPool()
+    local pool = {}
+    local enabledModules = WowLingo.Config:GetEnabledModules()
 
-    -- Convert hash table to array of {id, entry} pairs
-    local items = {}
-    for id, entry in pairs(tbl) do
-        if not excludeIds[id] then
-            table.insert(items, {id = id, entry = entry})
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
+
+        local language = WowLingo.Languages[langName]
+        local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
+
+        if language and data then
+            for id, entry in pairs(data) do
+                table.insert(pool, {
+                    id = id,
+                    entry = entry,
+                    language = langName,
+                    dataset = datasetName,
+                    languageAdapter = language,
+                })
+            end
         end
     end
 
-    if #items == 0 then
-        return nil, nil
+    return pool
+end
+
+-- Get a random entry from the word pool, excluding certain IDs
+local function getRandomFromPool(pool, excludeKey)
+    if #pool == 0 then
+        return nil
     end
 
-    local idx = math.random(1, #items)
-    return items[idx].id, items[idx].entry
+    -- Build a filtered list if we're excluding something
+    local candidates = {}
+    for _, item in ipairs(pool) do
+        local key = item.language .. ":" .. item.dataset .. ":" .. item.id
+        if key ~= excludeKey then
+            table.insert(candidates, item)
+        end
+    end
+
+    if #candidates == 0 then
+        return nil
+    end
+
+    local idx = math.random(1, #candidates)
+    return candidates[idx]
 end
 
 -- Generate a question
 -- Returns a question object or nil if not enough known words
 function QG:Generate()
-    local dataset = WowLingo:GetCurrentDataset()
-    if not dataset then
-        return nil, "No vocabulary dataset loaded"
-    end
+    -- Build pool from all enabled modules
+    local wordPool = buildWordPool()
 
-    local language = WowLingo:GetCurrentLanguage()
-    if not language then
-        return nil, "No language adapter found"
+    if #wordPool == 0 then
+        return nil, "No vocabulary loaded. Enable modules in /wl config."
     end
 
     -- Determine question direction
@@ -65,20 +94,33 @@ function QG:Generate()
         direction = directionSetting
     end
 
-    -- Get known words for both display types
-    local kanaKnown = WowLingo.Config:GetKnownTable("kana")
-    local kanjiKnown = WowLingo.Config:GetKnownTable("kanji")
-
     -- Build pool of known words with their display types
     local knownPool = {}
-    for id, entry in pairs(dataset) do
-        -- Check if this word is known in kana
-        if kanaKnown[id] and language:hasDisplayType(entry, "kana") then
-            table.insert(knownPool, {id = id, entry = entry, displayType = "kana"})
-        end
-        -- Check if this word is known in kanji
-        if kanjiKnown[id] and language:hasDisplayType(entry, "kanji") then
-            table.insert(knownPool, {id = id, entry = entry, displayType = "kanji"})
+
+    for _, item in ipairs(wordPool) do
+        local language = item.languageAdapter
+        local id = item.id
+        local entry = item.entry
+
+        -- Get known tables for this specific language/dataset
+        WowLingoSavedVars.activeLanguage = item.language
+        WowLingoSavedVars.activeDataset = item.dataset
+        WowLingo.Config:EnsureDataStructureFor(item.language, item.dataset)
+
+        -- Iterate over all display types for this language
+        local displayTypes = language.displayTypes or {}
+        for _, displayType in ipairs(displayTypes) do
+            local knownTable = WowLingo.Config:GetKnownTable(displayType)
+            if knownTable[id] and language:hasDisplayType(entry, displayType) then
+                table.insert(knownPool, {
+                    id = id,
+                    entry = entry,
+                    displayType = displayType,
+                    language = item.language,
+                    dataset = item.dataset,
+                    languageAdapter = language,
+                })
+            end
         end
     end
 
@@ -92,25 +134,31 @@ function QG:Generate()
     local wordId = selected.id
     local wordEntry = selected.entry
     local displayType = selected.displayType
+    local language = selected.languageAdapter
+
+    -- Set active language/dataset for this question (for compatibility)
+    WowLingoSavedVars.activeLanguage = selected.language
+    WowLingoSavedVars.activeDataset = selected.dataset
 
     -- Generate prompt and correct answer
     local prompt = language:formatPrompt(wordEntry, direction, displayType)
     local correctAnswer = language:formatAnswer(wordEntry, direction, displayType)
 
-    -- Generate distractors (wrong answers)
+    -- Generate distractors (wrong answers) from the full pool
     local distractors = {}
     local usedAnswers = {[correctAnswer] = true}
     local attempts = 0
     local maxAttempts = 50
+    local excludeKey = selected.language .. ":" .. selected.dataset .. ":" .. wordId
 
     while #distractors < 3 and attempts < maxAttempts do
         attempts = attempts + 1
 
-        -- Pick a random word from the full dataset
-        local distId, distEntry = getRandomFromTable(dataset, {[wordId] = true})
+        -- Pick a random word from the full pool
+        local distItem = getRandomFromPool(wordPool, excludeKey)
 
-        if distEntry then
-            local distAnswer = language:formatAnswer(distEntry, direction, displayType)
+        if distItem then
+            local distAnswer = distItem.languageAdapter:formatAnswer(distItem.entry, direction, displayType)
 
             -- Make sure it's not a duplicate
             if distAnswer and not usedAnswers[distAnswer] then
@@ -153,6 +201,9 @@ function QG:Generate()
         correctIndex = correctIndex,
         wordId = wordId,
         displayType = displayType,
+        -- Module info
+        language = selected.language,
+        dataset = selected.dataset,
         -- Extra info for display
         kana = wordEntry.kana,
         kanji = wordEntry.kanji,
@@ -160,24 +211,34 @@ function QG:Generate()
     }
 end
 
--- Get total count of available questions (known words)
+-- Get total count of available questions (known words across all enabled modules)
 function QG:GetAvailableCount()
-    local dataset = WowLingo:GetCurrentDataset()
-    if not dataset then return 0 end
-
-    local language = WowLingo:GetCurrentLanguage()
-    if not language then return 0 end
-
-    local kanaKnown = WowLingo.Config:GetKnownTable("kana")
-    local kanjiKnown = WowLingo.Config:GetKnownTable("kanji")
-
     local count = 0
-    for id, entry in pairs(dataset) do
-        if kanaKnown[id] and language:hasDisplayType(entry, "kana") then
-            count = count + 1
-        end
-        if kanjiKnown[id] and language:hasDisplayType(entry, "kanji") then
-            count = count + 1
+    local enabledModules = WowLingo.Config:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
+
+        local language = WowLingo.Languages[langName]
+        local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
+
+        if language and data then
+            -- Temporarily set active to get correct known tables
+            WowLingoSavedVars.activeLanguage = langName
+            WowLingoSavedVars.activeDataset = datasetName
+            WowLingo.Config:EnsureDataStructureFor(langName, datasetName)
+
+            -- Iterate over all display types for this language
+            local displayTypes = language.displayTypes or {}
+            for _, displayType in ipairs(displayTypes) do
+                local knownTable = WowLingo.Config:GetKnownTable(displayType)
+                for id, entry in pairs(data) do
+                    if knownTable[id] and language:hasDisplayType(entry, displayType) then
+                        count = count + 1
+                    end
+                end
+            end
         end
     end
 

@@ -1,6 +1,6 @@
 --[[
     WowLingo - Configuration UI Module
-    Scrollable word list with checkboxes for marking known words
+    Tabbed interface with Languages selection and Vocabulary list
     TBC Classic compatible (Interface 20505, requires BackdropTemplate)
 ]]
 
@@ -15,18 +15,28 @@ DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r ConfigUI.lua loaded.
 
 -- Constants
 local FRAME_WIDTH = 500
-local FRAME_HEIGHT = 510
+local FRAME_HEIGHT = 550
 local ROW_HEIGHT = 24
 local VISIBLE_ROWS = 15
 local PADDING = 12
+local TAB_HEIGHT = 28
+local CONTENT_TOP_OFFSET = 75  -- Below title and tabs
 
 -- Frame references
 local configFrame = nil
+local tabButtons = {}
+local tabPanels = {}
+local currentTab = "languages"
+
+-- Vocabulary tab references
 local scrollFrame = nil
 local scrollChild = nil
 local searchBox = nil
-local directionDropdown = nil
 local rows = {}
+
+-- Languages tab references
+local languageCheckboxes = {}
+local moduleCheckboxes = {}
 
 -- Data cache
 local filteredData = {}
@@ -44,6 +54,193 @@ local function GetBackdrop()
     }
 end
 
+local function GetTabBackdrop()
+    return {
+        bgFile = "Interface\\Buttons\\WHITE8X8",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = false,
+        edgeSize = 12,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    }
+end
+
+-- ============================================================================
+-- TAB SYSTEM
+-- ============================================================================
+
+local function ShowTab(tabName)
+    currentTab = tabName
+
+    for name, panel in pairs(tabPanels) do
+        if name == tabName then
+            panel:Show()
+        else
+            panel:Hide()
+        end
+    end
+
+    for name, btn in pairs(tabButtons) do
+        if name == tabName then
+            btn:SetBackdropColor(0.2, 0.2, 0.3, 1)
+            btn.text:SetTextColor(1, 0.82, 0)
+        else
+            btn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+            btn.text:SetTextColor(0.7, 0.7, 0.7)
+        end
+    end
+end
+
+local function CreateTabButton(parent, name, label, xOffset)
+    local btn = CreateFrame("Button", "WowLingoTab" .. name, parent, "BackdropTemplate")
+    btn:SetWidth(100)
+    btn:SetHeight(TAB_HEIGHT)
+    btn:SetPoint("TOPLEFT", parent, "TOPLEFT", PADDING + xOffset, -40)
+    btn:SetBackdrop(GetTabBackdrop())
+    btn:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+
+    btn.text = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    btn.text:SetPoint("CENTER")
+    btn.text:SetText(label)
+
+    btn:SetScript("OnClick", function()
+        ShowTab(name)
+    end)
+
+    btn:SetScript("OnEnter", function(self)
+        if currentTab ~= name then
+            self:SetBackdropColor(0.15, 0.15, 0.2, 1)
+        end
+    end)
+
+    btn:SetScript("OnLeave", function(self)
+        if currentTab ~= name then
+            self:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+        end
+    end)
+
+    tabButtons[name] = btn
+    return btn
+end
+
+-- ============================================================================
+-- LANGUAGES TAB
+-- ============================================================================
+
+local function RefreshLanguagesTab()
+    if not tabPanels.languages then return end
+
+    -- Clear existing checkboxes
+    for _, cb in pairs(languageCheckboxes) do
+        cb:Hide()
+        cb:SetParent(nil)
+    end
+    for _, cb in pairs(moduleCheckboxes) do
+        cb:Hide()
+        cb:SetParent(nil)
+    end
+    languageCheckboxes = {}
+    moduleCheckboxes = {}
+
+    local panel = tabPanels.languages
+    local yOffset = -10
+
+    -- Create header
+    local header = panel.header or panel:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    header:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, yOffset)
+    header:SetText("Select Languages & Modules")
+    panel.header = header
+    yOffset = yOffset - 30
+
+    -- Instructions
+    local instructions = panel.instructions or panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    instructions:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, yOffset)
+    instructions:SetText("Enable the languages and modules you want to study. Questions will be drawn from all enabled modules.")
+    instructions:SetWidth(FRAME_WIDTH - 50)
+    instructions:SetJustifyH("LEFT")
+    panel.instructions = instructions
+    yOffset = yOffset - 35
+
+    -- Iterate through available languages
+    for langName, langAdapter in pairs(WowLingo.Languages) do
+        -- Language header with expand/collapse indicator
+        local langFrame = CreateFrame("Frame", nil, panel)
+        langFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, yOffset)
+        langFrame:SetWidth(FRAME_WIDTH - 50)
+        langFrame:SetHeight(28)
+
+        local langText = langFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        langText:SetPoint("LEFT", langFrame, "LEFT", 5, 0)
+        langText:SetText("|cFFFFD100" .. (langAdapter.displayName or langName) .. "|r")
+
+        yOffset = yOffset - 32
+
+        -- Auto-discover datasets from WowLingo.Data (instead of hardcoded list)
+        local datasets = WowLingo:GetAvailableDatasets(langName)
+
+        if #datasets == 0 then
+            -- No datasets found for this language
+            local noDataLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            noDataLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 35, yOffset)
+            noDataLabel:SetText("|cFF666666(no modules installed)|r")
+            yOffset = yOffset - 26
+        else
+            for _, datasetName in ipairs(datasets) do
+                local cb = CreateFrame("CheckButton", "WowLingoModule_" .. langName .. "_" .. datasetName, panel, "UICheckButtonTemplate")
+                cb:SetPoint("TOPLEFT", panel, "TOPLEFT", 30, yOffset)
+                cb:SetWidth(24)
+                cb:SetHeight(24)
+
+                local label = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+                label:SetPoint("LEFT", cb, "RIGHT", 5, 0)
+
+                -- Count words in dataset
+                local wordCount = 0
+                for _ in pairs(WowLingo.Data[langName][datasetName]) do
+                    wordCount = wordCount + 1
+                end
+                label:SetText(datasetName .. " |cFF888888(" .. wordCount .. " words)|r")
+
+                -- Check if this module is enabled
+                local isEnabled = WowLingo.Config:IsModuleEnabled(langName, datasetName)
+                cb:SetChecked(isEnabled)
+
+                cb:SetScript("OnClick", function(self)
+                    if self:GetChecked() then
+                        WowLingo.Config:EnableModule(langName, datasetName)
+                    else
+                        WowLingo.Config:DisableModule(langName, datasetName)
+                    end
+                    ConfigUI:RefreshVocabularyTab()
+                end)
+
+                moduleCheckboxes[langName .. "_" .. datasetName] = cb
+                yOffset = yOffset - 26
+            end
+        end
+
+        yOffset = yOffset - 10  -- Extra spacing between languages
+    end
+
+    -- Add "Apply to Quiz" info at bottom
+    local applyInfo = panel.applyInfo or panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    applyInfo:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 10, 10)
+    applyInfo:SetText("|cFFAAAAAA* Changes apply immediately to quiz questions|r")
+    panel.applyInfo = applyInfo
+end
+
+local function CreateLanguagesPanel(parent)
+    local panel = CreateFrame("Frame", "WowLingoLanguagesPanel", parent)
+    panel:SetPoint("TOPLEFT", parent, "TOPLEFT", PADDING, -CONTENT_TOP_OFFSET)
+    panel:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -PADDING, PADDING)
+
+    tabPanels.languages = panel
+    return panel
+end
+
+-- ============================================================================
+-- VOCABULARY TAB (existing functionality)
+-- ============================================================================
+
 -- Create a row for the word list
 local function CreateRow(parent, index)
     local row = CreateFrame("Frame", "WowLingoConfigRow" .. index, parent)
@@ -56,77 +253,121 @@ local function CreateRow(parent, index)
     row.bg:SetTexture("Interface\\Buttons\\WHITE8X8")
     row.bg:SetVertexColor(0.15, 0.15, 0.15, index % 2 == 0 and 0.5 or 0.3)
 
-    -- Kana checkbox
-    row.kanaCheck = CreateFrame("CheckButton", "WowLingoKanaCheck" .. index, row, "UICheckButtonTemplate")
+    -- Display type 1 checkbox (e.g., kana for Japanese)
+    row.kanaCheck = CreateFrame("CheckButton", "WowLingoDisplayType1Check" .. index, row, "UICheckButtonTemplate")
     row.kanaCheck:SetPoint("LEFT", row, "LEFT", 5, 0)
     row.kanaCheck:SetWidth(24)
     row.kanaCheck:SetHeight(24)
     row.kanaCheck:SetScript("OnClick", function(self)
-        if row.wordId then
+        if row.wordId and row.language and row.dataset then
+            -- Get the first display type for this language
+            local langAdapter = WowLingo.Languages[row.language]
+            local displayTypes = langAdapter and langAdapter.displayTypes or {"kana"}
+            local dt1 = displayTypes[1]
+
+            -- Set correct context before marking
+            WowLingoSavedVars.activeLanguage = row.language
+            WowLingoSavedVars.activeDataset = row.dataset
             if self:GetChecked() then
-                WowLingo.Config:MarkKnown(row.wordId, "kana")
+                WowLingo.Config:MarkKnown(row.wordId, dt1)
             else
-                WowLingo.Config:MarkUnknown(row.wordId, "kana")
+                WowLingo.Config:MarkUnknown(row.wordId, dt1)
             end
         end
     end)
 
-    -- Kana text (use Japanese font)
+    -- Display type 1 text (primary display - e.g., kana for Japanese)
     row.kanaText = row:CreateFontString(nil, "OVERLAY")
-    row.kanaText:SetFontObject(WowLingo.Fonts.Japanese)
+    -- Font will be set dynamically when row is updated
     row.kanaText:SetPoint("LEFT", row.kanaCheck, "RIGHT", 2, 0)
     row.kanaText:SetWidth(80)
     row.kanaText:SetJustifyH("LEFT")
 
-    -- Kanji checkbox
-    row.kanjiCheck = CreateFrame("CheckButton", "WowLingoKanjiCheck" .. index, row, "UICheckButtonTemplate")
+    -- Display type 2 checkbox (e.g., kanji for Japanese)
+    row.kanjiCheck = CreateFrame("CheckButton", "WowLingoDisplayType2Check" .. index, row, "UICheckButtonTemplate")
     row.kanjiCheck:SetPoint("LEFT", row.kanaText, "RIGHT", 10, 0)
     row.kanjiCheck:SetWidth(24)
     row.kanjiCheck:SetHeight(24)
     row.kanjiCheck:SetScript("OnClick", function(self)
-        if row.wordId then
-            if self:GetChecked() then
-                WowLingo.Config:MarkKnown(row.wordId, "kanji")
-            else
-                WowLingo.Config:MarkUnknown(row.wordId, "kanji")
+        if row.wordId and row.language and row.dataset then
+            -- Get the second display type for this language
+            local langAdapter = WowLingo.Languages[row.language]
+            local displayTypes = langAdapter and langAdapter.displayTypes or {"kana", "kanji"}
+            local dt2 = displayTypes[2]
+
+            if dt2 then
+                -- Set correct context before marking
+                WowLingoSavedVars.activeLanguage = row.language
+                WowLingoSavedVars.activeDataset = row.dataset
+                if self:GetChecked() then
+                    WowLingo.Config:MarkKnown(row.wordId, dt2)
+                else
+                    WowLingo.Config:MarkUnknown(row.wordId, dt2)
+                end
             end
         end
     end)
 
-    -- Kanji text (use Japanese font)
+    -- Display type 2 text (secondary display - e.g., kanji for Japanese)
     row.kanjiText = row:CreateFontString(nil, "OVERLAY")
-    row.kanjiText:SetFontObject(WowLingo.Fonts.Japanese)
+    -- Font will be set dynamically when row is updated
     row.kanjiText:SetPoint("LEFT", row.kanjiCheck, "RIGHT", 2, 0)
     row.kanjiText:SetWidth(60)
     row.kanjiText:SetJustifyH("LEFT")
 
-    -- Meaning text (use Japanese font for consistency)
+    -- Meaning text
     row.meaningText = row:CreateFontString(nil, "OVERLAY")
-    row.meaningText:SetFontObject(WowLingo.Fonts.Japanese)
+    -- Font will be set dynamically when row is updated
     row.meaningText:SetPoint("LEFT", row.kanjiText, "RIGHT", 15, 0)
     row.meaningText:SetPoint("RIGHT", row, "RIGHT", -10, 0)
     row.meaningText:SetJustifyH("LEFT")
 
     row.wordId = nil
+    row.language = nil
+    row.dataset = nil
     return row
 end
 
 -- Update row data
-local function UpdateRow(row, wordId, entry)
+local function UpdateRow(row, wordId, entry, language, dataset)
     row.wordId = wordId
+    row.language = language
+    row.dataset = dataset
 
-    local language = WowLingo:GetCurrentLanguage()
+    -- Set context for checking known status
+    WowLingoSavedVars.activeLanguage = language
+    WowLingoSavedVars.activeDataset = dataset
+    WowLingo.Config:EnsureDataStructureFor(language, dataset)
 
-    -- Kana
-    row.kanaText:SetText(entry.kana or "")
-    row.kanaCheck:SetChecked(WowLingo.Config:IsKnown(wordId, "kana"))
-    row.kanaCheck:Show()
-    row.kanaText:Show()
+    -- Get language adapter for display types and font
+    local langAdapter = WowLingo.Languages[language]
+    local displayTypes = langAdapter and langAdapter.displayTypes or {"kana", "kanji"}
+    local font = WowLingo.FontManager:GetFont(language, 12)
 
-    -- Kanji (may not exist for all words)
-    if entry.kanji and entry.kanji ~= "" then
-        row.kanjiText:SetText(entry.kanji)
-        row.kanjiCheck:SetChecked(WowLingo.Config:IsKnown(wordId, "kanji"))
+    -- Set fonts dynamically
+    row.kanaText:SetFontObject(font)
+    row.kanjiText:SetFontObject(font)
+    row.meaningText:SetFontObject(font)
+
+    -- Display type 1 (e.g., kana for Japanese)
+    local dt1 = displayTypes[1]
+    if dt1 and langAdapter then
+        local value = langAdapter:getDisplayValue(entry, dt1)
+        row.kanaText:SetText(value or "")
+        row.kanaCheck:SetChecked(WowLingo.Config:IsKnown(wordId, dt1))
+        row.kanaCheck:Show()
+        row.kanaText:Show()
+    else
+        row.kanaText:SetText("")
+        row.kanaCheck:Hide()
+    end
+
+    -- Display type 2 (e.g., kanji for Japanese)
+    local dt2 = displayTypes[2]
+    if dt2 and langAdapter and langAdapter:hasDisplayType(entry, dt2) then
+        local value = langAdapter:getDisplayValue(entry, dt2)
+        row.kanjiText:SetText(value or "")
+        row.kanjiCheck:SetChecked(WowLingo.Config:IsKnown(wordId, dt2))
         row.kanjiCheck:Show()
         row.kanjiText:Show()
     else
@@ -149,42 +390,60 @@ end
 -- Clear row
 local function ClearRow(row)
     row.wordId = nil
+    row.language = nil
+    row.dataset = nil
     row:Hide()
 end
 
--- Build filtered data based on search
+-- Build filtered data based on search (now combines all enabled modules)
 local function BuildFilteredData(searchText)
     filteredData = {}
     sortedIds = {}
 
-    local dataset = WowLingo:GetCurrentDataset()
-    if not dataset then return end
+    -- Get all enabled modules
+    local enabledModules = WowLingo.Config:GetEnabledModules()
 
     searchText = searchText and string.lower(searchText) or ""
 
-    for id, entry in pairs(dataset) do
-        local match = true
+    for _, moduleInfo in ipairs(enabledModules) do
+        local langName = moduleInfo.language
+        local datasetName = moduleInfo.dataset
 
-        if searchText ~= "" then
-            local kana = string.lower(entry.kana or "")
-            local kanji = string.lower(entry.kanji or "")
-            local meaning = string.lower(entry.meaning or "")
+        if WowLingo.Data[langName] and WowLingo.Data[langName][datasetName] then
+            local dataset = WowLingo.Data[langName][datasetName]
 
-            match = string.find(kana, searchText, 1, true)
-                or string.find(kanji, searchText, 1, true)
-                or string.find(meaning, searchText, 1, true)
-        end
+            for id, entry in pairs(dataset) do
+                -- Create unique key combining language, dataset, and id
+                local uniqueId = langName .. ":" .. datasetName .. ":" .. id
+                local match = true
 
-        if match then
-            filteredData[id] = entry
-            table.insert(sortedIds, id)
+                if searchText ~= "" then
+                    local kana = string.lower(entry.kana or "")
+                    local kanji = string.lower(entry.kanji or "")
+                    local meaning = string.lower(entry.meaning or "")
+
+                    match = string.find(kana, searchText, 1, true)
+                        or string.find(kanji, searchText, 1, true)
+                        or string.find(meaning, searchText, 1, true)
+                end
+
+                if match then
+                    filteredData[uniqueId] = {
+                        entry = entry,
+                        language = langName,
+                        dataset = datasetName,
+                        originalId = id,
+                    }
+                    table.insert(sortedIds, uniqueId)
+                end
+            end
         end
     end
 
     -- Sort by kana
     table.sort(sortedIds, function(a, b)
-        local entryA = filteredData[a]
-        local entryB = filteredData[b]
+        local entryA = filteredData[a].entry
+        local entryB = filteredData[b].entry
         return (entryA.kana or "") < (entryB.kana or "")
     end)
 end
@@ -198,10 +457,11 @@ local function UpdateScrollFrame()
     for i = 1, VISIBLE_ROWS do
         local row = rows[i]
         local dataIndex = offset + i
-        local wordId = sortedIds[dataIndex]
+        local uniqueId = sortedIds[dataIndex]
 
-        if wordId and filteredData[wordId] then
-            UpdateRow(row, wordId, filteredData[wordId])
+        if uniqueId and filteredData[uniqueId] then
+            local data = filteredData[uniqueId]
+            UpdateRow(row, data.originalId, data.entry, data.language, data.dataset)
         else
             ClearRow(row)
         end
@@ -209,6 +469,253 @@ local function UpdateScrollFrame()
 
     FauxScrollFrame_Update(scrollFrame, #sortedIds, VISIBLE_ROWS, ROW_HEIGHT)
 end
+
+local function CreateVocabularyPanel(parent)
+    local panel = CreateFrame("Frame", "WowLingoVocabularyPanel", parent)
+    panel:SetPoint("TOPLEFT", parent, "TOPLEFT", PADDING, -CONTENT_TOP_OFFSET)
+    panel:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -PADDING, PADDING)
+
+    -- Search box
+    searchBox = CreateFrame("EditBox", "WowLingoSearchBox", panel, "InputBoxTemplate")
+    searchBox:SetPoint("TOPLEFT", panel, "TOPLEFT", 60, -5)
+    searchBox:SetWidth(150)
+    searchBox:SetHeight(20)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetScript("OnTextChanged", function(self)
+        BuildFilteredData(self:GetText())
+        UpdateScrollFrame()
+    end)
+    searchBox:SetScript("OnEscapePressed", function(self)
+        self:ClearFocus()
+    end)
+
+    local searchLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    searchLabel:SetPoint("RIGHT", searchBox, "LEFT", -5, 0)
+    searchLabel:SetText("Search:")
+
+    -- Direction dropdown label
+    local dirLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dirLabel:SetPoint("LEFT", searchBox, "RIGHT", 20, 0)
+    dirLabel:SetText("Direction:")
+
+    -- Direction buttons (simple button-based dropdown alternative for Classic)
+    local directions = {
+        {value = "both", label = "Both"},
+        {value = "target_to_meaning", label = "JP → EN"},
+        {value = "meaning_to_target", label = "EN → JP"},
+    }
+
+    local directionDisplay = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    directionDisplay:SetPoint("LEFT", dirLabel, "RIGHT", 5, 0)
+
+    local function UpdateDirectionDisplay()
+        local current = WowLingo:GetQuestionDirection()
+        for _, d in ipairs(directions) do
+            if d.value == current then
+                directionDisplay:SetText("[" .. d.label .. "]")
+                break
+            end
+        end
+    end
+
+    local dirCycleBtn = CreateFrame("Button", nil, panel)
+    dirCycleBtn:SetPoint("LEFT", directionDisplay, "RIGHT", 5, 0)
+    dirCycleBtn:SetWidth(20)
+    dirCycleBtn:SetHeight(20)
+    dirCycleBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
+    dirCycleBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
+    dirCycleBtn:SetScript("OnClick", function()
+        local current = WowLingo:GetQuestionDirection()
+        local nextIdx = 1
+        for i, d in ipairs(directions) do
+            if d.value == current then
+                nextIdx = (i % #directions) + 1
+                break
+            end
+        end
+        WowLingo:SetQuestionDirection(directions[nextIdx].value)
+        UpdateDirectionDisplay()
+    end)
+
+    UpdateDirectionDisplay()
+    panel.UpdateDirectionDisplay = UpdateDirectionDisplay
+
+    -- Column headers (will be updated dynamically)
+    local headerY = -35
+    local headerCol1 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerCol1:SetPoint("TOPLEFT", panel, "TOPLEFT", 30, headerY)
+    headerCol1:SetText("Type 1")  -- Updated dynamically
+    panel.headerCol1 = headerCol1
+
+    local headerCol2 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerCol2:SetPoint("TOPLEFT", panel, "TOPLEFT", 130, headerY)
+    headerCol2:SetText("Type 2")  -- Updated dynamically
+    panel.headerCol2 = headerCol2
+
+    local headerMeaning = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerMeaning:SetPoint("TOPLEFT", panel, "TOPLEFT", 220, headerY)
+    headerMeaning:SetText("Meaning")
+
+    -- Scroll frame
+    scrollFrame = CreateFrame("ScrollFrame", "WowLingoScrollFrame", panel, "FauxScrollFrameTemplate")
+    scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -55)
+    scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -24, 45)
+    scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
+        FauxScrollFrame_OnVerticalScroll(self, offset, ROW_HEIGHT, UpdateScrollFrame)
+    end)
+
+    -- Create rows
+    for i = 1, VISIBLE_ROWS do
+        local row = CreateRow(panel, i)
+        row:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 0, -((i - 1) * ROW_HEIGHT))
+        rows[i] = row
+    end
+
+    -- Bulk action buttons (labels updated dynamically)
+    local btnWidth = 100
+
+    local markAllType1Btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    markAllType1Btn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 5)
+    markAllType1Btn:SetWidth(btnWidth)
+    markAllType1Btn:SetHeight(24)
+    markAllType1Btn:SetText("All Type1 ✓")  -- Updated dynamically
+    panel.markAllType1Btn = markAllType1Btn
+
+    local markAllType2Btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    markAllType2Btn:SetPoint("LEFT", markAllType1Btn, "RIGHT", 5, 0)
+    markAllType2Btn:SetWidth(btnWidth)
+    markAllType2Btn:SetHeight(24)
+    markAllType2Btn:SetText("All Type2 ✓")  -- Updated dynamically
+    panel.markAllType2Btn = markAllType2Btn
+
+    local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    resetBtn:SetPoint("LEFT", markAllType2Btn, "RIGHT", 5, 0)
+    resetBtn:SetWidth(btnWidth)
+    resetBtn:SetHeight(24)
+    resetBtn:SetText("Reset All")
+    resetBtn:SetScript("OnClick", function()
+        WowLingo.Config:ResetAll()
+        UpdateScrollFrame()
+    end)
+
+    -- Stats display
+    local statsText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statsText:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 10)
+    panel.statsText = statsText
+
+    tabPanels.vocabulary = panel
+    return panel
+end
+
+-- Get display types from enabled modules (cached for UI)
+local cachedDisplayTypes = {}
+local function GetCachedDisplayTypes()
+    cachedDisplayTypes = WowLingo.Config:GetAllDisplayTypes()
+    return cachedDisplayTypes
+end
+
+-- Update column headers and button labels based on current display types
+local function UpdateDynamicLabels()
+    if not tabPanels.vocabulary then return end
+
+    local displayTypes = GetCachedDisplayTypes()
+    local panel = tabPanels.vocabulary
+
+    -- Get labels for display types (use first enabled language for labels)
+    local dt1 = displayTypes[1]
+    local dt2 = displayTypes[2]
+    local label1 = dt1 or "Type 1"
+    local label2 = dt2 or "Type 2"
+
+    -- Try to get human-readable labels from the first enabled module's language
+    local enabledModules = WowLingo.Config:GetEnabledModules()
+    if #enabledModules > 0 then
+        local langAdapter = WowLingo.Languages[enabledModules[1].language]
+        if langAdapter and langAdapter.getDisplayTypeLabel then
+            if dt1 then label1 = langAdapter:getDisplayTypeLabel(dt1) end
+            if dt2 then label2 = langAdapter:getDisplayTypeLabel(dt2) end
+        end
+    end
+
+    -- Update column headers
+    if panel.headerCol1 then
+        panel.headerCol1:SetText(label1)
+    end
+    if panel.headerCol2 then
+        if dt2 then
+            panel.headerCol2:SetText(label2)
+            panel.headerCol2:Show()
+        else
+            panel.headerCol2:Hide()
+        end
+    end
+
+    -- Update button labels and click handlers
+    if panel.markAllType1Btn then
+        panel.markAllType1Btn:SetText("All " .. label1 .. " ✓")
+        panel.markAllType1Btn:SetScript("OnClick", function()
+            if dt1 then
+                WowLingo.Config:MarkAllKnown(dt1)
+                UpdateScrollFrame()
+            end
+        end)
+        if dt1 then
+            panel.markAllType1Btn:Enable()
+        else
+            panel.markAllType1Btn:Disable()
+        end
+    end
+
+    if panel.markAllType2Btn then
+        if dt2 then
+            panel.markAllType2Btn:SetText("All " .. label2 .. " ✓")
+            panel.markAllType2Btn:SetScript("OnClick", function()
+                WowLingo.Config:MarkAllKnown(dt2)
+                UpdateScrollFrame()
+            end)
+            panel.markAllType2Btn:Show()
+            panel.markAllType2Btn:Enable()
+        else
+            panel.markAllType2Btn:Hide()
+        end
+    end
+end
+
+-- Update stats display
+local function UpdateStats()
+    if not tabPanels.vocabulary or not tabPanels.vocabulary.statsText then return end
+
+    local displayTypes = cachedDisplayTypes
+    if #displayTypes == 0 then
+        displayTypes = GetCachedDisplayTypes()
+    end
+
+    local statsText = ""
+    for i, dt in ipairs(displayTypes) do
+        local known = WowLingo.Config:GetKnownCount(dt)
+        local total = WowLingo.Config:GetTotalCount(dt)
+
+        -- Get label
+        local label = dt
+        local enabledModules = WowLingo.Config:GetEnabledModules()
+        if #enabledModules > 0 then
+            local langAdapter = WowLingo.Languages[enabledModules[1].language]
+            if langAdapter and langAdapter.getDisplayTypeLabel then
+                label = langAdapter:getDisplayTypeLabel(dt)
+            end
+        end
+
+        if i > 1 then statsText = statsText .. " | " end
+        statsText = statsText .. label .. ": " .. known .. "/" .. total
+    end
+
+    statsText = statsText .. " | Total: " .. #sortedIds .. " words"
+    tabPanels.vocabulary.statsText:SetText(statsText)
+end
+
+-- ============================================================================
+-- MAIN INITIALIZATION
+-- ============================================================================
 
 -- Initialize the Config UI
 function ConfigUI:Initialize()
@@ -240,7 +747,7 @@ function ConfigUI:Initialize()
     -- Title
     local title = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", configFrame, "TOP", 0, -12)
-    title:SetText("WowLingo - Vocabulary")
+    title:SetText("WowLingo Settings")
 
     -- Close button
     local closeBtn = CreateFrame("Button", "WowLingoConfigCloseBtn", configFrame, "UIPanelCloseButton")
@@ -249,153 +756,19 @@ function ConfigUI:Initialize()
         ConfigUI:Hide()
     end)
 
-    -- Search box
-    searchBox = CreateFrame("EditBox", "WowLingoSearchBox", configFrame, "InputBoxTemplate")
-    searchBox:SetPoint("TOPLEFT", configFrame, "TOPLEFT", PADDING + 70, -40)
-    searchBox:SetWidth(150)
-    searchBox:SetHeight(20)
-    searchBox:SetAutoFocus(false)
-    searchBox:SetScript("OnTextChanged", function(self)
-        BuildFilteredData(self:GetText())
-        UpdateScrollFrame()
-    end)
-    searchBox:SetScript("OnEscapePressed", function(self)
-        self:ClearFocus()
-    end)
+    -- Create tab buttons
+    CreateTabButton(configFrame, "languages", "Languages", 0)
+    CreateTabButton(configFrame, "vocabulary", "Vocabulary", 105)
 
-    local searchLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    searchLabel:SetPoint("RIGHT", searchBox, "LEFT", -5, 0)
-    searchLabel:SetText("Search:")
+    -- Create tab panels
+    CreateLanguagesPanel(configFrame)
+    CreateVocabularyPanel(configFrame)
 
-    -- Direction dropdown label
-    local dirLabel = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    dirLabel:SetPoint("LEFT", searchBox, "RIGHT", 20, 0)
-    dirLabel:SetText("Direction:")
-
-    -- Direction buttons (simple button-based dropdown alternative for Classic)
-    local directions = {
-        {value = "both", label = "Both"},
-        {value = "target_to_meaning", label = "JP → EN"},
-        {value = "meaning_to_target", label = "EN → JP"},
-    }
-
-    local directionDisplay = configFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    directionDisplay:SetPoint("LEFT", dirLabel, "RIGHT", 5, 0)
-
-    local function UpdateDirectionDisplay()
-        local current = WowLingo:GetQuestionDirection()
-        for _, d in ipairs(directions) do
-            if d.value == current then
-                directionDisplay:SetText("[" .. d.label .. "]")
-                break
-            end
-        end
-    end
-
-    local dirCycleBtn = CreateFrame("Button", nil, configFrame)
-    dirCycleBtn:SetPoint("LEFT", directionDisplay, "RIGHT", 5, 0)
-    dirCycleBtn:SetWidth(20)
-    dirCycleBtn:SetHeight(20)
-    dirCycleBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
-    dirCycleBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
-    dirCycleBtn:SetScript("OnClick", function()
-        local current = WowLingo:GetQuestionDirection()
-        local nextIdx = 1
-        for i, d in ipairs(directions) do
-            if d.value == current then
-                nextIdx = (i % #directions) + 1
-                break
-            end
-        end
-        WowLingo:SetQuestionDirection(directions[nextIdx].value)
-        UpdateDirectionDisplay()
-    end)
-
-    UpdateDirectionDisplay()
-
-    -- Column headers
-    local headerY = -70
-    local headerKana = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerKana:SetPoint("TOPLEFT", configFrame, "TOPLEFT", PADDING + 30, headerY)
-    headerKana:SetText("Kana")
-
-    local headerKanji = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerKanji:SetPoint("TOPLEFT", configFrame, "TOPLEFT", PADDING + 130, headerY)
-    headerKanji:SetText("Kanji")
-
-    local headerMeaning = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    headerMeaning:SetPoint("TOPLEFT", configFrame, "TOPLEFT", PADDING + 220, headerY)
-    headerMeaning:SetText("Meaning")
-
-    -- Scroll frame
-    scrollFrame = CreateFrame("ScrollFrame", "WowLingoScrollFrame", configFrame, "FauxScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", configFrame, "TOPLEFT", PADDING, -90)
-    scrollFrame:SetPoint("BOTTOMRIGHT", configFrame, "BOTTOMRIGHT", -PADDING - 24, 50)
-    scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
-        FauxScrollFrame_OnVerticalScroll(self, offset, ROW_HEIGHT, UpdateScrollFrame)
-    end)
-
-    -- Create rows
-    for i = 1, VISIBLE_ROWS do
-        local row = CreateRow(configFrame, i)
-        row:SetPoint("TOPLEFT", scrollFrame, "TOPLEFT", 0, -((i - 1) * ROW_HEIGHT))
-        rows[i] = row
-    end
-
-    -- Bulk action buttons
-    local btnWidth = 100
-
-    local markAllKanaBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    markAllKanaBtn:SetPoint("BOTTOMLEFT", configFrame, "BOTTOMLEFT", PADDING, 15)
-    markAllKanaBtn:SetWidth(btnWidth)
-    markAllKanaBtn:SetHeight(24)
-    markAllKanaBtn:SetText("All Kana ✓")
-    markAllKanaBtn:SetScript("OnClick", function()
-        WowLingo.Config:MarkAllKnown("kana")
-        UpdateScrollFrame()
-    end)
-
-    local markAllKanjiBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    markAllKanjiBtn:SetPoint("LEFT", markAllKanaBtn, "RIGHT", 5, 0)
-    markAllKanjiBtn:SetWidth(btnWidth)
-    markAllKanjiBtn:SetHeight(24)
-    markAllKanjiBtn:SetText("All Kanji ✓")
-    markAllKanjiBtn:SetScript("OnClick", function()
-        WowLingo.Config:MarkAllKnown("kanji")
-        UpdateScrollFrame()
-    end)
-
-    local resetBtn = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    resetBtn:SetPoint("LEFT", markAllKanjiBtn, "RIGHT", 5, 0)
-    resetBtn:SetWidth(btnWidth)
-    resetBtn:SetHeight(24)
-    resetBtn:SetText("Reset All")
-    resetBtn:SetScript("OnClick", function()
-        WowLingo.Config:ResetAll()
-        UpdateScrollFrame()
-    end)
-
-    -- Stats display
-    local statsText = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    statsText:SetPoint("BOTTOMRIGHT", configFrame, "BOTTOMRIGHT", -PADDING, 20)
-    configFrame.statsText = statsText
+    -- Show default tab
+    ShowTab("languages")
 
     -- Load saved position
     WowLingo.Config:LoadFramePosition(configFrame, "configFramePosition")
-end
-
--- Update stats display
-local function UpdateStats()
-    if not configFrame or not configFrame.statsText then return end
-
-    local kanaKnown = WowLingo.Config:GetKnownCount("kana")
-    local kanaTotal = WowLingo.Config:GetTotalCount("kana")
-    local kanjiKnown = WowLingo.Config:GetKnownCount("kanji")
-    local kanjiTotal = WowLingo.Config:GetTotalCount("kanji")
-
-    configFrame.statsText:SetText(
-        string.format("Kana: %d/%d | Kanji: %d/%d", kanaKnown, kanaTotal, kanjiKnown, kanjiTotal)
-    )
 end
 
 -- Show config panel
@@ -404,6 +777,8 @@ function ConfigUI:Show()
         self:Initialize()
     end
 
+    RefreshLanguagesTab()
+    UpdateDynamicLabels()
     BuildFilteredData(searchBox and searchBox:GetText() or "")
     UpdateScrollFrame()
     UpdateStats()
@@ -426,9 +801,19 @@ function ConfigUI:Toggle()
     end
 end
 
--- Refresh the list (called when word status changes)
+-- Refresh the vocabulary list (called when word status changes)
 function ConfigUI:RefreshList()
     if configFrame and configFrame:IsShown() then
+        UpdateScrollFrame()
+        UpdateStats()
+    end
+end
+
+-- Refresh vocabulary tab specifically (called when modules change)
+function ConfigUI:RefreshVocabularyTab()
+    if configFrame and configFrame:IsShown() then
+        UpdateDynamicLabels()
+        BuildFilteredData(searchBox and searchBox:GetText() or "")
         UpdateScrollFrame()
         UpdateStats()
     end
