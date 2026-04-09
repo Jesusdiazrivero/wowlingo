@@ -42,6 +42,9 @@ local moduleCheckboxes = {}
 local filteredData = {}
 local sortedIds = {}
 
+-- Forward declarations
+local UpdateStats
+
 -- Create backdrop for Classic Era
 local function GetBackdrop()
     return {
@@ -319,8 +322,28 @@ local function CreateRow(parent, index)
     row.meaningText = row:CreateFontString(nil, "OVERLAY")
     -- Font will be set dynamically when row is updated
     row.meaningText:SetPoint("LEFT", row.kanjiText, "RIGHT", 15, 0)
-    row.meaningText:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+    row.meaningText:SetWidth(140)
     row.meaningText:SetJustifyH("LEFT")
+
+    -- Learning progress bar (only visible for words in learning queue)
+    row.progressBar = CreateFrame("StatusBar", "WowLingoRowBar" .. index, row)
+    row.progressBar:SetPoint("RIGHT", row, "RIGHT", -5, 0)
+    row.progressBar:SetWidth(55)
+    row.progressBar:SetHeight(12)
+    row.progressBar:SetMinMaxValues(0, WowLingo.Config.TIMES_TO_LEARN)
+    row.progressBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+    row.progressBar:SetStatusBarColor(0.2, 0.6, 1.0)
+
+    row.progressBg = row.progressBar:CreateTexture(nil, "BACKGROUND")
+    row.progressBg:SetAllPoints()
+    row.progressBg:SetTexture("Interface\\Buttons\\WHITE8X8")
+    row.progressBg:SetVertexColor(0.1, 0.1, 0.1, 0.8)
+
+    row.progressText = row.progressBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    row.progressText:SetPoint("CENTER", row.progressBar, "CENTER", 0, 0)
+    row.progressText:SetTextColor(1, 1, 1)
+
+    row.progressBar:Hide()
 
     row.wordId = nil
     row.language = nil
@@ -379,10 +402,31 @@ local function UpdateRow(row, wordId, entry, language, dataset)
 
     -- Meaning
     local meaning = entry.meaning or ""
-    if string.len(meaning) > 50 then
-        meaning = string.sub(meaning, 1, 47) .. "..."
+    if string.len(meaning) > 30 then
+        meaning = string.sub(meaning, 1, 27) .. "..."
     end
     row.meaningText:SetText(meaning)
+
+    -- Learning progress bar: show progress for the active learning displayType
+    local Config = WowLingo.Config
+    local showProgress = false
+    if Config:IsGradualLearningEnabled() and langAdapter then
+        -- Find the first displayType in the learning queue for this word
+        for _, dt in ipairs(displayTypes) do
+            if Config:IsInLearningQueue(language, dataset, wordId, dt) then
+                local timesAsked = Config:GetTimesAsked(language, dataset, wordId, dt)
+                local dtLabel = langAdapter:getDisplayTypeLabel(dt)
+                row.progressBar:SetValue(timesAsked)
+                row.progressText:SetText(dtLabel:sub(1, 1) .. ":" .. timesAsked .. "/" .. Config.TIMES_TO_LEARN)
+                row.progressBar:Show()
+                showProgress = true
+                break
+            end
+        end
+    end
+    if not showProgress then
+        row.progressBar:Hide()
+    end
 
     row:Show()
 end
@@ -392,6 +436,7 @@ local function ClearRow(row)
     row.wordId = nil
     row.language = nil
     row.dataset = nil
+    row.progressBar:Hide()
     row:Hide()
 end
 
@@ -540,6 +585,27 @@ local function CreateVocabularyPanel(parent)
     UpdateDirectionDisplay()
     panel.UpdateDirectionDisplay = UpdateDirectionDisplay
 
+    -- Gradual learning toggle
+    local gradualCb = CreateFrame("CheckButton", "WowLingoGradualLearningToggle", panel, "UICheckButtonTemplate")
+    gradualCb:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -60, -3)
+    gradualCb:SetWidth(24)
+    gradualCb:SetHeight(24)
+
+    local gradualLabel = gradualCb:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    gradualLabel:SetPoint("LEFT", gradualCb, "RIGHT", 2, 0)
+    gradualLabel:SetText("Gradual")
+    gradualCb:SetChecked(WowLingo.Config:IsGradualLearningEnabled())
+
+    gradualCb:SetScript("OnClick", function(self)
+        WowLingo.Config:SetGradualLearning(self:GetChecked())
+        if self:GetChecked() then
+            WowLingo.Config:IntroduceNewWords()
+        end
+        UpdateScrollFrame()
+        UpdateStats()
+    end)
+    panel.gradualCheckbox = gradualCb
+
     -- Column headers (will be updated dynamically)
     local headerY = -35
     local headerCol1 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -555,6 +621,11 @@ local function CreateVocabularyPanel(parent)
     local headerMeaning = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerMeaning:SetPoint("TOPLEFT", panel, "TOPLEFT", 220, headerY)
     headerMeaning:SetText("Meaning")
+
+    local headerProgress = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerProgress:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -24, headerY)
+    headerProgress:SetText("Progress")
+    panel.headerProgress = headerProgress
 
     -- Scroll frame
     scrollFrame = CreateFrame("ScrollFrame", "WowLingoScrollFrame", panel, "FauxScrollFrameTemplate")
@@ -679,10 +750,19 @@ local function UpdateDynamicLabels()
             panel.markAllType2Btn:Hide()
         end
     end
+
+    -- Show/hide progress column header based on gradual learning state
+    if panel.headerProgress then
+        if WowLingo.Config:IsGradualLearningEnabled() then
+            panel.headerProgress:Show()
+        else
+            panel.headerProgress:Hide()
+        end
+    end
 end
 
 -- Update stats display
-local function UpdateStats()
+UpdateStats = function()
     if not tabPanels.vocabulary or not tabPanels.vocabulary.statsText then return end
 
     local displayTypes = cachedDisplayTypes
@@ -710,6 +790,16 @@ local function UpdateStats()
     end
 
     statsText = statsText .. " | Total: " .. #sortedIds .. " words"
+
+    -- Append learning stats when gradual mode is on
+    local Config = WowLingo.Config
+    if Config:IsGradualLearningEnabled() then
+        local queueSize = Config:GetLearningQueueSize()
+        local graduated = Config:GetGraduatedCount()
+        statsText = statsText .. " | Learning: " .. queueSize .. "/" .. Config.MAX_LEARNING_WORDS
+        statsText = statsText .. " | Learned: " .. graduated
+    end
+
     tabPanels.vocabulary.statsText:SetText(statsText)
 end
 
@@ -782,6 +872,10 @@ function ConfigUI:Show()
     BuildFilteredData(searchBox and searchBox:GetText() or "")
     UpdateScrollFrame()
     UpdateStats()
+    -- Sync gradual learning toggle state
+    if tabPanels.vocabulary and tabPanels.vocabulary.gradualCheckbox then
+        tabPanels.vocabulary.gradualCheckbox:SetChecked(WowLingo.Config:IsGradualLearningEnabled())
+    end
     configFrame:Show()
 end
 
@@ -820,6 +914,6 @@ function ConfigUI:RefreshVocabularyTab()
 end
 
 -- Called when a word's known status changes
-function ConfigUI:OnWordStatusChanged(id, displayType, isKnown)
+function ConfigUI:OnWordStatusChanged(_id, _displayType, _isKnown)
     self:RefreshList()
 end

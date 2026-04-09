@@ -242,9 +242,11 @@ function WowLingo:InitializeSavedVars()
         activeDataset = defaultDataset,
         knownWords = {},
         enabledModules = {},  -- Tracks which language:dataset combinations are enabled
+        learningProgress = {},  -- Gradual learning: [lang][dataset][wordId] = timesAsked
         settings = {
             questionDirection = "both",
             onlyKnownWords = true,
+            gradualLearning = false,
             framePosition = nil,
             configFramePosition = nil,
         }
@@ -285,6 +287,10 @@ function WowLingo:InitializeSavedVars()
 
     if not WowLingoSavedVars.enabledModules then
         WowLingoSavedVars.enabledModules = {}
+    end
+
+    if not WowLingoSavedVars.learningProgress then
+        WowLingoSavedVars.learningProgress = {}
     end
 end
 

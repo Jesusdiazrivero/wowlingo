@@ -504,3 +504,297 @@ function Config:GetAllDisplayTypes()
 
     return displayTypes
 end
+
+-- ============================================================================
+-- GRADUAL LEARNING
+-- ============================================================================
+
+local MAX_LEARNING_WORDS = 10
+local TIMES_TO_LEARN = 15
+
+function Config:IsGradualLearningEnabled()
+    return WowLingoSavedVars.settings.gradualLearning == true
+end
+
+function Config:SetGradualLearning(enabled)
+    WowLingoSavedVars.settings.gradualLearning = enabled and true or false
+end
+
+-- Ensure learningProgress structure exists for a language/dataset.
+-- Also migrates old format (number) to new format (table per word).
+function Config:EnsureLearningProgressStructure(lang, dataset)
+    if not WowLingoSavedVars.learningProgress then
+        WowLingoSavedVars.learningProgress = {}
+    end
+    if not WowLingoSavedVars.learningProgress[lang] then
+        WowLingoSavedVars.learningProgress[lang] = {}
+    end
+    if not WowLingoSavedVars.learningProgress[lang][dataset] then
+        WowLingoSavedVars.learningProgress[lang][dataset] = {}
+    end
+
+    -- Migrate old format: number → {[displayType] = number}
+    local langAdapter = WowLingo.Languages[lang]
+    local dt1 = langAdapter and langAdapter.displayTypes and langAdapter.displayTypes[1]
+    if dt1 then
+        for wordId, value in pairs(WowLingoSavedVars.learningProgress[lang][dataset]) do
+            if type(value) == "number" then
+                WowLingoSavedVars.learningProgress[lang][dataset][wordId] = { [dt1] = value }
+            end
+        end
+    end
+end
+
+-- Get times a (word, displayType) has been correctly answered. Returns -1 if not in progress.
+function Config:GetTimesAsked(lang, dataset, wordId, displayType)
+    self:EnsureLearningProgressStructure(lang, dataset)
+    local wordProgress = WowLingoSavedVars.learningProgress[lang][dataset][wordId]
+    if type(wordProgress) ~= "table" then return -1 end
+    return wordProgress[displayType] or -1
+end
+
+-- Increment correct answer count for a (word, displayType); returns new count.
+function Config:IncrementTimesAsked(lang, dataset, wordId, displayType)
+    self:EnsureLearningProgressStructure(lang, dataset)
+    local wordProgress = WowLingoSavedVars.learningProgress[lang][dataset][wordId]
+    if type(wordProgress) ~= "table" then
+        wordProgress = {}
+        WowLingoSavedVars.learningProgress[lang][dataset][wordId] = wordProgress
+    end
+    local current = wordProgress[displayType] or 0
+    local newCount = current + 1
+    wordProgress[displayType] = newCount
+    return newCount
+end
+
+-- Check if a (word, displayType) is in the learning queue (0 <= timesAsked < TIMES_TO_LEARN)
+function Config:IsInLearningQueue(lang, dataset, wordId, displayType)
+    local times = self:GetTimesAsked(lang, dataset, wordId, displayType)
+    return times >= 0 and times < TIMES_TO_LEARN
+end
+
+-- Check if a (word, displayType) has graduated (timesAsked >= TIMES_TO_LEARN)
+function Config:IsWordGraduated(lang, dataset, wordId, displayType)
+    local times = self:GetTimesAsked(lang, dataset, wordId, displayType)
+    return times >= TIMES_TO_LEARN
+end
+
+-- Get all (word, displayType) pairs currently in the learning queue across enabled modules
+function Config:GetLearningQueue()
+    local queue = {}
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local lang = moduleInfo.language
+        local dataset = moduleInfo.dataset
+        self:EnsureLearningProgressStructure(lang, dataset)
+
+        local data = WowLingo.Data[lang] and WowLingo.Data[lang][dataset]
+        local langAdapter = WowLingo.Languages[lang]
+        if data and langAdapter then
+            local progress = WowLingoSavedVars.learningProgress[lang][dataset]
+            for wordId, wordProgress in pairs(progress) do
+                if type(wordProgress) == "table" and data[wordId] then
+                    for dt, timesAsked in pairs(wordProgress) do
+                        if timesAsked >= 0 and timesAsked < TIMES_TO_LEARN then
+                            table.insert(queue, {
+                                language = lang,
+                                dataset = dataset,
+                                wordId = wordId,
+                                displayType = dt,
+                                timesAsked = timesAsked,
+                                entry = data[wordId],
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return queue
+end
+
+-- Get current learning queue size (counts (word, displayType) pairs)
+function Config:GetLearningQueueSize()
+    return #self:GetLearningQueue()
+end
+
+-- Introduce new (word, displayType) pairs to fill the queue up to MAX_LEARNING_WORDS.
+-- Respects language.sequentialLearning: if true, displayType[i] requires displayType[i-1] to be known.
+function Config:IntroduceNewWords()
+    local currentSize = self:GetLearningQueueSize()
+    if currentSize >= MAX_LEARNING_WORDS then return end
+
+    local slotsAvailable = MAX_LEARNING_WORDS - currentSize
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        if slotsAvailable <= 0 then break end
+
+        local lang = moduleInfo.language
+        local dataset = moduleInfo.dataset
+        local data = WowLingo.Data[lang] and WowLingo.Data[lang][dataset]
+        local langAdapter = WowLingo.Languages[lang]
+        if data and langAdapter then
+            self:EnsureLearningProgressStructure(lang, dataset)
+            self:EnsureDataStructureFor(lang, dataset)
+
+            local displayTypes = langAdapter.displayTypes or {}
+            local sequential = langAdapter.sequentialLearning == true
+
+            -- Collect all candidate (wordId, displayType) pairs
+            local candidates = {}
+            for wordId, entry in pairs(data) do
+                local wordProgress = WowLingoSavedVars.learningProgress[lang][dataset][wordId]
+                if type(wordProgress) ~= "table" then
+                    wordProgress = nil
+                end
+
+                for dtIndex, dt in ipairs(displayTypes) do
+                    if langAdapter:hasDisplayType(entry, dt) then
+                        -- Check if this (word, dt) already has progress
+                        local hasProgress = wordProgress and wordProgress[dt] ~= nil
+                        -- Check if already known
+                        local isKnown = WowLingoSavedVars.knownWords[lang]
+                            and WowLingoSavedVars.knownWords[lang][dataset]
+                            and WowLingoSavedVars.knownWords[lang][dataset][dt]
+                            and WowLingoSavedVars.knownWords[lang][dataset][dt][wordId]
+
+                        if not hasProgress and not isKnown then
+                            -- Check sequential prerequisite
+                            local eligible = true
+                            if sequential and dtIndex > 1 then
+                                local prevDt = displayTypes[dtIndex - 1]
+                                local prevKnown = WowLingoSavedVars.knownWords[lang]
+                                    and WowLingoSavedVars.knownWords[lang][dataset]
+                                    and WowLingoSavedVars.knownWords[lang][dataset][prevDt]
+                                    and WowLingoSavedVars.knownWords[lang][dataset][prevDt][wordId]
+                                eligible = prevKnown == true
+                            end
+
+                            if eligible then
+                                table.insert(candidates, { wordId = wordId, displayType = dt })
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Sort by wordId for predictable progression
+            table.sort(candidates, function(a, b)
+                if a.wordId ~= b.wordId then return a.wordId < b.wordId end
+                return a.displayType < b.displayType
+            end)
+
+            -- Introduce candidates
+            for _, candidate in ipairs(candidates) do
+                if slotsAvailable <= 0 then break end
+                local wordProgress = WowLingoSavedVars.learningProgress[lang][dataset][candidate.wordId]
+                if type(wordProgress) ~= "table" then
+                    wordProgress = {}
+                    WowLingoSavedVars.learningProgress[lang][dataset][candidate.wordId] = wordProgress
+                end
+                wordProgress[candidate.displayType] = 0
+                slotsAvailable = slotsAvailable - 1
+            end
+        end
+    end
+end
+
+-- Graduate a (word, displayType): mark only that displayType as known.
+function Config:GraduateWord(lang, dataset, wordId, displayType)
+    local langAdapter = WowLingo.Languages[lang]
+    if not langAdapter then return end
+
+    -- Set context
+    local prevLang = WowLingoSavedVars.activeLanguage
+    local prevDataset = WowLingoSavedVars.activeDataset
+    WowLingoSavedVars.activeLanguage = lang
+    WowLingoSavedVars.activeDataset = dataset
+    self:EnsureDataStructureFor(lang, dataset)
+
+    local data = WowLingo.Data[lang] and WowLingo.Data[lang][dataset]
+    local entry = data and data[wordId]
+
+    if entry and langAdapter:hasDisplayType(entry, displayType) then
+        WowLingoSavedVars.knownWords[lang][dataset][displayType][wordId] = true
+    end
+
+    -- Restore context
+    WowLingoSavedVars.activeLanguage = prevLang
+    WowLingoSavedVars.activeDataset = prevDataset
+
+    -- Notify UI
+    if WowLingo.ConfigUI and WowLingo.ConfigUI.OnWordStatusChanged then
+        WowLingo.ConfigUI:OnWordStatusChanged(wordId, displayType, true)
+    end
+end
+
+-- Get count of graduated (word, displayType) pairs across enabled modules
+function Config:GetGraduatedCount()
+    local count = 0
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local lang = moduleInfo.language
+        local dataset = moduleInfo.dataset
+        self:EnsureLearningProgressStructure(lang, dataset)
+
+        local progress = WowLingoSavedVars.learningProgress[lang][dataset]
+        for _, wordProgress in pairs(progress) do
+            if type(wordProgress) == "table" then
+                for _, timesAsked in pairs(wordProgress) do
+                    if timesAsked >= TIMES_TO_LEARN then
+                        count = count + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return count
+end
+
+-- Get count of unseen (word, displayType) pairs across enabled modules
+function Config:GetUnseenCount()
+    local count = 0
+    local enabledModules = self:GetEnabledModules()
+
+    for _, moduleInfo in ipairs(enabledModules) do
+        local lang = moduleInfo.language
+        local dataset = moduleInfo.dataset
+        local data = WowLingo.Data[lang] and WowLingo.Data[lang][dataset]
+        local langAdapter = WowLingo.Languages[lang]
+        if data and langAdapter then
+            self:EnsureLearningProgressStructure(lang, dataset)
+            self:EnsureDataStructureFor(lang, dataset)
+
+            local displayTypes = langAdapter.displayTypes or {}
+
+            for wordId, entry in pairs(data) do
+                local wordProgress = WowLingoSavedVars.learningProgress[lang][dataset][wordId]
+
+                for _, dt in ipairs(displayTypes) do
+                    if langAdapter:hasDisplayType(entry, dt) then
+                        local hasProgress = type(wordProgress) == "table" and wordProgress[dt] ~= nil
+                        local isKnown = WowLingoSavedVars.knownWords[lang]
+                            and WowLingoSavedVars.knownWords[lang][dataset]
+                            and WowLingoSavedVars.knownWords[lang][dataset][dt]
+                            and WowLingoSavedVars.knownWords[lang][dataset][dt][wordId]
+
+                        if not hasProgress and not isKnown then
+                            count = count + 1
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return count
+end
+
+-- Expose constants for other modules
+Config.MAX_LEARNING_WORDS = MAX_LEARNING_WORDS
+Config.TIMES_TO_LEARN = TIMES_TO_LEARN

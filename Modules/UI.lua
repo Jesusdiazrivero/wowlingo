@@ -185,7 +185,12 @@ function UI:Show()
         self:Initialize()
     end
 
-    -- Check if we have any known words
+    -- When gradual learning is on, ensure words are introduced before checking count
+    if WowLingo.Config:IsGradualLearningEnabled() then
+        WowLingo.Config:IntroduceNewWords()
+    end
+
+    -- Check if we have any available words
     local count = WowLingo.QuestionGenerator:GetAvailableCount()
     if count == 0 then
         WowLingo:Print("No known words to quiz! Open /wl config to mark words as known.")
@@ -271,6 +276,19 @@ function UI:OnAnswerClick(index)
             SetButtonColor(btn, unpack(COLOR_INCORRECT))
         end
         btn:Disable()  -- Prevent clicking during feedback
+    end
+
+    -- Gradual learning: increment on correct answer
+    if isCorrect and currentQuestion.isLearningWord then
+        local Config = WowLingo.Config
+        if Config:IsGradualLearningEnabled() then
+            local q = currentQuestion
+            local newCount = Config:IncrementTimesAsked(q.language, q.dataset, q.wordId, q.displayType)
+            if newCount >= Config.TIMES_TO_LEARN then
+                Config:GraduateWord(q.language, q.dataset, q.wordId, q.displayType)
+                WowLingo:Print("'" .. (q.meaning or "") .. "' " .. (q.displayType or "") .. " learned!")
+            end
+        end
     end
 
     -- Optional: Play sound feedback

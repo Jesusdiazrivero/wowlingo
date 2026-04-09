@@ -74,9 +74,128 @@ local function getRandomFromPool(pool, excludeKey)
     return candidates[idx]
 end
 
+-- Build a pool of known words (with display types) from the word pool
+local function buildKnownPool(wordPool)
+    local knownPool = {}
+
+    for _, item in ipairs(wordPool) do
+        local language = item.languageAdapter
+        local id = item.id
+        local entry = item.entry
+
+        WowLingoSavedVars.activeLanguage = item.language
+        WowLingoSavedVars.activeDataset = item.dataset
+        WowLingo.Config:EnsureDataStructureFor(item.language, item.dataset)
+
+        local displayTypes = language.displayTypes or {}
+        for _, displayType in ipairs(displayTypes) do
+            local knownTable = WowLingo.Config:GetKnownTable(displayType)
+            if knownTable[id] and language:hasDisplayType(entry, displayType) then
+                table.insert(knownPool, {
+                    id = id,
+                    entry = entry,
+                    displayType = displayType,
+                    language = item.language,
+                    dataset = item.dataset,
+                    languageAdapter = language,
+                })
+            end
+        end
+    end
+
+    return knownPool
+end
+
+-- Build a pool of learning-queue words (with display types) from the word pool.
+-- Each (word, displayType) pair in the learning queue gets its own pool entry.
+local function buildLearningPool(wordPool)
+    local learningPool = {}
+    local Config = WowLingo.Config
+
+    for _, item in ipairs(wordPool) do
+        local language = item.languageAdapter
+        local id = item.id
+        local entry = item.entry
+
+        local displayTypes = language.displayTypes or {}
+        for _, displayType in ipairs(displayTypes) do
+            if language:hasDisplayType(entry, displayType)
+                and Config:IsInLearningQueue(item.language, item.dataset, id, displayType) then
+                table.insert(learningPool, {
+                    id = id,
+                    entry = entry,
+                    displayType = displayType,
+                    language = item.language,
+                    dataset = item.dataset,
+                    languageAdapter = language,
+                })
+            end
+        end
+    end
+
+    return learningPool
+end
+
+-- Pick distractors with required number from a known/learned pool
+local function pickDistractors(correctAnswer, excludeKey, direction, displayType, knownDistractorsRequired, knownPool, wordPool)
+    local distractors = {}
+    local usedAnswers = {[correctAnswer] = true}
+    local attempts = 0
+    local maxAttempts = 50
+
+    -- Phase 1: pick required known distractors
+    if knownDistractorsRequired > 0 and #knownPool > 0 then
+        local shuffledKnown = {}
+        for _, item in ipairs(knownPool) do
+            table.insert(shuffledKnown, item)
+        end
+        shuffle(shuffledKnown)
+
+        for _, item in ipairs(shuffledKnown) do
+            if #distractors >= knownDistractorsRequired then break end
+            local key = item.language .. ":" .. item.dataset .. ":" .. item.id
+            if key ~= excludeKey then
+                local distAnswer = item.languageAdapter:formatAnswer(item.entry, direction, displayType)
+                if distAnswer and not usedAnswers[distAnswer] then
+                    table.insert(distractors, distAnswer)
+                    usedAnswers[distAnswer] = true
+                end
+            end
+        end
+    end
+
+    -- Phase 2: fill remaining from the full word pool
+    while #distractors < 3 and attempts < maxAttempts do
+        attempts = attempts + 1
+        local distItem = getRandomFromPool(wordPool, excludeKey)
+        if distItem then
+            local distAnswer = distItem.languageAdapter:formatAnswer(distItem.entry, direction, displayType)
+            if distAnswer and not usedAnswers[distAnswer] then
+                table.insert(distractors, distAnswer)
+                usedAnswers[distAnswer] = true
+            end
+        end
+    end
+
+    -- Pad with placeholders if needed
+    while #distractors < 3 do
+        local placeholder = "???"
+        if not usedAnswers[placeholder] then
+            table.insert(distractors, placeholder)
+            usedAnswers[placeholder] = true
+        else
+            table.insert(distractors, "---")
+        end
+    end
+
+    return distractors
+end
+
 -- Generate a question
--- Returns a question object or nil if not enough known words
+-- Returns a question object or nil if not enough words
 function QG:Generate()
+    local Config = WowLingo.Config
+
     -- Build pool from all enabled modules
     local wordPool = buildWordPool()
 
@@ -94,43 +213,52 @@ function QG:Generate()
         direction = directionSetting
     end
 
-    -- Build pool of known words with their display types
-    local knownPool = {}
+    local gradualEnabled = Config:IsGradualLearningEnabled()
+    local selected
+    local isLearningWord = false
+    local timesAsked = 0
 
-    for _, item in ipairs(wordPool) do
-        local language = item.languageAdapter
-        local id = item.id
-        local entry = item.entry
+    if gradualEnabled then
+        -- Ensure learning queue is filled
+        Config:IntroduceNewWords()
 
-        -- Get known tables for this specific language/dataset
-        WowLingoSavedVars.activeLanguage = item.language
-        WowLingoSavedVars.activeDataset = item.dataset
-        WowLingo.Config:EnsureDataStructureFor(item.language, item.dataset)
+        -- Build separate pools
+        local knownPool = buildKnownPool(wordPool)
+        local learningPool = buildLearningPool(wordPool)
 
-        -- Iterate over all display types for this language
-        local displayTypes = language.displayTypes or {}
-        for _, displayType in ipairs(displayTypes) do
-            local knownTable = WowLingo.Config:GetKnownTable(displayType)
-            if knownTable[id] and language:hasDisplayType(entry, displayType) then
-                table.insert(knownPool, {
-                    id = id,
-                    entry = entry,
-                    displayType = displayType,
-                    language = item.language,
-                    dataset = item.dataset,
-                    languageAdapter = language,
-                })
-            end
+        if #knownPool == 0 and #learningPool == 0 then
+            return nil, "No words available. Mark words as known or enable gradual learning in /wl config."
         end
+
+        -- Weighted selection: 20% learning, 80% known
+        local pickLearning = false
+        if #learningPool > 0 and #knownPool > 0 then
+            pickLearning = math.random(1, 100) <= 33
+        elseif #learningPool > 0 then
+            pickLearning = true
+        end
+
+        if pickLearning then
+            local idx = math.random(1, #learningPool)
+            selected = learningPool[idx]
+            isLearningWord = true
+            timesAsked = Config:GetTimesAsked(selected.language, selected.dataset, selected.id, selected.displayType)
+        else
+            local idx = math.random(1, #knownPool)
+            selected = knownPool[idx]
+        end
+    else
+        -- Original behavior: only known words
+        local knownPool = buildKnownPool(wordPool)
+
+        if #knownPool == 0 then
+            return nil, "No known words. Mark some words as known in /wl config first."
+        end
+
+        local idx = math.random(1, #knownPool)
+        selected = knownPool[idx]
     end
 
-    if #knownPool == 0 then
-        return nil, "No known words. Mark some words as known in /wl config first."
-    end
-
-    -- Select a random word from known pool
-    local selectedIdx = math.random(1, #knownPool)
-    local selected = knownPool[selectedIdx]
     local wordId = selected.id
     local wordEntry = selected.entry
     local displayType = selected.displayType
@@ -144,40 +272,26 @@ function QG:Generate()
     local prompt = language:formatPrompt(wordEntry, direction, displayType)
     local correctAnswer = language:formatAnswer(wordEntry, direction, displayType)
 
-    -- Generate distractors (wrong answers) from the full pool
-    local distractors = {}
-    local usedAnswers = {[correctAnswer] = true}
-    local attempts = 0
-    local maxAttempts = 50
+    -- Determine distractor rules
+    local knownDistractorsRequired = 0
+    local knownDistractorPool = {}
+
+    if gradualEnabled and isLearningWord then
+        if timesAsked == 0 then
+            knownDistractorsRequired = 3
+        elseif timesAsked == 1 then
+            knownDistractorsRequired = 2
+        elseif timesAsked == 2 then
+            knownDistractorsRequired = 1
+        end
+
+        if knownDistractorsRequired > 0 then
+            knownDistractorPool = buildKnownPool(wordPool)
+        end
+    end
+
     local excludeKey = selected.language .. ":" .. selected.dataset .. ":" .. wordId
-
-    while #distractors < 3 and attempts < maxAttempts do
-        attempts = attempts + 1
-
-        -- Pick a random word from the full pool
-        local distItem = getRandomFromPool(wordPool, excludeKey)
-
-        if distItem then
-            local distAnswer = distItem.languageAdapter:formatAnswer(distItem.entry, direction, displayType)
-
-            -- Make sure it's not a duplicate
-            if distAnswer and not usedAnswers[distAnswer] then
-                table.insert(distractors, distAnswer)
-                usedAnswers[distAnswer] = true
-            end
-        end
-    end
-
-    -- If we couldn't get enough distractors, pad with placeholder
-    while #distractors < 3 do
-        local placeholder = "???"
-        if not usedAnswers[placeholder] then
-            table.insert(distractors, placeholder)
-            usedAnswers[placeholder] = true
-        else
-            table.insert(distractors, "---")
-        end
-    end
+    local distractors = pickDistractors(correctAnswer, excludeKey, direction, displayType, knownDistractorsRequired, knownDistractorPool, wordPool)
 
     -- Combine correct answer with distractors and shuffle
     local options = {correctAnswer, distractors[1], distractors[2], distractors[3]}
@@ -204,6 +318,9 @@ function QG:Generate()
         -- Module info
         language = selected.language,
         dataset = selected.dataset,
+        -- Gradual learning info
+        isLearningWord = isLearningWord,
+        timesAsked = timesAsked,
         -- Extra info for display
         kana = wordEntry.kana,
         kanji = wordEntry.kanji,
@@ -211,10 +328,12 @@ function QG:Generate()
     }
 end
 
--- Get total count of available questions (known words across all enabled modules)
+-- Get total count of available questions (known words + learning words when gradual mode is on)
 function QG:GetAvailableCount()
     local count = 0
-    local enabledModules = WowLingo.Config:GetEnabledModules()
+    local Config = WowLingo.Config
+    local gradualEnabled = Config:IsGradualLearningEnabled()
+    local enabledModules = Config:GetEnabledModules()
 
     for _, moduleInfo in ipairs(enabledModules) do
         local langName = moduleInfo.language
@@ -224,18 +343,20 @@ function QG:GetAvailableCount()
         local data = WowLingo.Data[langName] and WowLingo.Data[langName][datasetName]
 
         if language and data then
-            -- Temporarily set active to get correct known tables
             WowLingoSavedVars.activeLanguage = langName
             WowLingoSavedVars.activeDataset = datasetName
-            WowLingo.Config:EnsureDataStructureFor(langName, datasetName)
+            Config:EnsureDataStructureFor(langName, datasetName)
 
-            -- Iterate over all display types for this language
             local displayTypes = language.displayTypes or {}
             for _, displayType in ipairs(displayTypes) do
-                local knownTable = WowLingo.Config:GetKnownTable(displayType)
+                local knownTable = Config:GetKnownTable(displayType)
                 for id, entry in pairs(data) do
-                    if knownTable[id] and language:hasDisplayType(entry, displayType) then
-                        count = count + 1
+                    if language:hasDisplayType(entry, displayType) then
+                        if knownTable[id] then
+                            count = count + 1
+                        elseif gradualEnabled and Config:IsInLearningQueue(langName, datasetName, id, displayType) then
+                            count = count + 1
+                        end
                     end
                 end
             end

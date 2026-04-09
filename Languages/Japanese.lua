@@ -20,6 +20,9 @@ WowLingo.Languages["Japanese"] = {
     -- Display types this language supports (used for tracking known words)
     displayTypes = {"kana", "kanji"},
 
+    -- Gradual learning: kana must be learned before kanji
+    sequentialLearning = true,
+
     -- Display type labels for UI
     displayTypeLabels = {
         kana = "Kana",
