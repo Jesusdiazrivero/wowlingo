@@ -81,8 +81,7 @@ local function CreateAnswerButton(parent, index)
     button:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 
     -- Create text (font will be set dynamically based on current question's language)
-    button.text = button:CreateFontString(nil, "OVERLAY")
-    -- Font object set dynamically when question is displayed
+    button.text = button:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     button.text:SetPoint("CENTER")
     button.text:SetWidth(FRAME_WIDTH - PADDING * 4)
     button.text:SetJustifyH("CENTER")
@@ -148,8 +147,7 @@ function UI:Initialize()
     end)
 
     -- Prompt text (question) - font set dynamically based on current language
-    promptText = quizFrame:CreateFontString(nil, "OVERLAY")
-    -- Font object set dynamically when question is displayed
+    promptText = quizFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     promptText:SetPoint("TOP", title, "BOTTOM", 0, -8)
     promptText:SetWidth(FRAME_WIDTH - PADDING * 2)
     promptText:SetJustifyH("CENTER")

@@ -21,6 +21,9 @@ python3 tools/convert_csv.py tools/n5.csv Languages/Data/Japanese/Modules/N5.lua
 
 CSV format: `jmdict_seq,kana,kanji,waller_definition`
 
+### Linting
+Run `luacheck .` to check all Lua files for errors and warnings. This must be run after completing any code changes.
+
 ### Installation/Testing
 Copy this repository to `World of Warcraft/_classic_/Interface/AddOns/WowLingo/` and test in-game using `/wl`, `/wl config`, or `/wl help`.
 
