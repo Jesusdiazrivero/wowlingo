@@ -230,10 +230,11 @@ function QG:Generate()
             return nil, "No words available. Mark words as known or enable gradual learning in /wl config."
         end
 
-        -- Weighted selection: 20% learning, 80% known
+        -- Weighted selection: learning vs known
         local pickLearning = false
+        local learningRatio = Config:GetLearningRatio()
         if #learningPool > 0 and #knownPool > 0 then
-            pickLearning = math.random(1, 100) <= 33
+            pickLearning = math.random(1, 100) <= learningRatio
         elseif #learningPool > 0 then
             pickLearning = true
         end

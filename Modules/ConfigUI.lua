@@ -606,6 +606,53 @@ local function CreateVocabularyPanel(parent)
     end)
     panel.gradualCheckbox = gradualCb
 
+    -- Learning ratio control (shown next to Gradual checkbox)
+    local ratioLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    ratioLabel:SetPoint("RIGHT", gradualCb, "LEFT", -5, 0)
+    ratioLabel:SetText("New:")
+
+    local ratioDisplay = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    ratioDisplay:SetPoint("RIGHT", ratioLabel, "LEFT", -2, 0)
+
+    local ratioOptions = {25, 50, 75}
+    local function UpdateRatioDisplay()
+        local current = WowLingo.Config:GetLearningRatio()
+        ratioDisplay:SetText("[" .. current .. "%]")
+    end
+
+    local ratioCycleBtn = CreateFrame("Button", nil, panel)
+    ratioCycleBtn:SetPoint("RIGHT", ratioDisplay, "LEFT", -2, 0)
+    ratioCycleBtn:SetWidth(16)
+    ratioCycleBtn:SetHeight(16)
+    ratioCycleBtn:SetNormalTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Up")
+    ratioCycleBtn:SetPushedTexture("Interface\\Buttons\\UI-SpellbookIcon-NextPage-Down")
+    ratioCycleBtn:SetScript("OnClick", function()
+        local current = WowLingo.Config:GetLearningRatio()
+        local nextIdx = 1
+        for i, v in ipairs(ratioOptions) do
+            if v == current then
+                nextIdx = (i % #ratioOptions) + 1
+                break
+            end
+        end
+        WowLingo.Config:SetLearningRatio(ratioOptions[nextIdx])
+        UpdateRatioDisplay()
+    end)
+    ratioCycleBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOPRIGHT")
+        GameTooltip:SetText("Learning Ratio")
+        GameTooltip:AddLine("Percentage of quiz questions drawn from\nnew/learning words vs already-known words.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    ratioCycleBtn:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+
+    UpdateRatioDisplay()
+    panel.ratioDisplay = ratioDisplay
+    panel.ratioCycleBtn = ratioCycleBtn
+    panel.UpdateRatioDisplay = UpdateRatioDisplay
+
     -- Column headers (will be updated dynamically)
     local headerY = -35
     local headerCol1 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")

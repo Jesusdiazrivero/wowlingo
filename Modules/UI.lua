@@ -24,8 +24,8 @@ local FEEDBACK_DELAY = 1.0  -- Seconds to show feedback before next question
 -- Colors
 local COLOR_CORRECT = {0.2, 0.8, 0.2}     -- Green
 local COLOR_INCORRECT = {0.8, 0.2, 0.2}   -- Red
-local COLOR_DEFAULT = {0.6, 0.6, 0.6}     -- Light gray
-local COLOR_HOVER = {0.7, 0.7, 0.75}      -- Lighter gray
+local COLOR_DEFAULT = {0.35, 0.35, 0.35}   -- Medium gray
+local COLOR_HOVER = {0.45, 0.45, 0.5}     -- Slightly lighter gray
 
 -- Frame references
 local quizFrame = nil
@@ -234,7 +234,7 @@ function UI:NextQuestion()
     -- Get fonts for the question's language
     local langName = question.language or WowLingo:GetActiveLanguageName()
     local promptFont = WowLingo.FontManager:GetLargeFont(langName)
-    local buttonFont = WowLingo.FontManager:GetNormalFont(langName)
+    local buttonFont = WowLingo.FontManager:GetFont(langName, 14)
 
     -- Set fonts dynamically
     if promptFont then

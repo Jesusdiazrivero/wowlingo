@@ -247,6 +247,7 @@ function WowLingo:InitializeSavedVars()
             questionDirection = "both",
             onlyKnownWords = true,
             gradualLearning = false,
+            learningRatio = 50,
             framePosition = nil,
             configFramePosition = nil,
         }

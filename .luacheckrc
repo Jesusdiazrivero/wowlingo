@@ -23,6 +23,7 @@ read_globals = {
     "FauxScrollFrame_GetOffset",
     "FauxScrollFrame_OnVerticalScroll",
     "FauxScrollFrame_Update",
+    "GameTooltip",
 }
 
 -- Suppress unused self in WoW callback patterns (e.g., SetScript("OnClick", function(self) ... end))

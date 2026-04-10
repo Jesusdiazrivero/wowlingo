@@ -520,6 +520,15 @@ function Config:SetGradualLearning(enabled)
     WowLingoSavedVars.settings.gradualLearning = enabled and true or false
 end
 
+-- Learning ratio: percentage of questions drawn from learning pool (vs known pool)
+function Config:GetLearningRatio()
+    return WowLingoSavedVars.settings.learningRatio or 50
+end
+
+function Config:SetLearningRatio(ratio)
+    WowLingoSavedVars.settings.learningRatio = ratio
+end
+
 -- Ensure learningProgress structure exists for a language/dataset.
 -- Also migrates old format (number) to new format (table per word).
 function Config:EnsureLearningProgressStructure(lang, dataset)
