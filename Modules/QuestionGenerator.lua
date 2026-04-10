@@ -11,6 +11,11 @@ WowLingo.QuestionGenerator = WowLingo.QuestionGenerator or {}
 
 local QG = WowLingo.QuestionGenerator
 
+-- Recently-asked cooldown state (session-only, not persisted)
+local recentHistory = {}   -- ordered list of {key = "lang:dataset:id", questionNumber = N}
+local questionCounter = 0
+local MAX_HISTORY = 200    -- prune limit to prevent unbounded growth
+
 DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r QuestionGenerator.lua loaded.")
 
 -- Fisher-Yates shuffle for randomizing arrays
@@ -21,6 +26,51 @@ local function shuffle(tbl)
         tbl[i], tbl[j] = tbl[j], tbl[i]
     end
     return tbl
+end
+
+-- Calculate cooldown window based on known word count
+local function getCooldownWindow(knownCount)
+    return 10 + 5 * math.floor(knownCount / 100)
+end
+
+-- Check if a word key is on cooldown
+local function isOnCooldown(wordKey, cooldownWindow)
+    for i = #recentHistory, 1, -1 do
+        local entry = recentHistory[i]
+        if questionCounter - entry.questionNumber >= cooldownWindow then
+            break
+        end
+        if entry.key == wordKey then
+            return true
+        end
+    end
+    return false
+end
+
+-- Record a word as recently asked and prune old entries
+local function recordQuestion(wordKey)
+    questionCounter = questionCounter + 1
+    table.insert(recentHistory, { key = wordKey, questionNumber = questionCounter })
+    -- Prune oldest entries beyond MAX_HISTORY
+    while #recentHistory > MAX_HISTORY do
+        table.remove(recentHistory, 1)
+    end
+end
+
+-- Filter a pool to remove words on cooldown; returns original pool if all filtered out
+local function filterCooldown(pool, cooldownWindow)
+    local filtered = {}
+    for _, item in ipairs(pool) do
+        local key = item.language .. ":" .. item.dataset .. ":" .. item.id
+        if not isOnCooldown(key, cooldownWindow) then
+            table.insert(filtered, item)
+        end
+    end
+    -- Fall back to unfiltered pool if everything is on cooldown
+    if #filtered == 0 then
+        return pool
+    end
+    return filtered
 end
 
 -- Build a combined pool of all words from enabled modules
@@ -230,6 +280,11 @@ function QG:Generate()
             return nil, "No words available. Mark words as known or enable gradual learning in /wl config."
         end
 
+        -- Apply recently-asked cooldown
+        local cooldownWindow = getCooldownWindow(#knownPool)
+        knownPool = filterCooldown(knownPool, cooldownWindow)
+        learningPool = filterCooldown(learningPool, cooldownWindow)
+
         -- Weighted selection: learning vs known
         local pickLearning = false
         local learningRatio = Config:GetLearningRatio()
@@ -256,6 +311,10 @@ function QG:Generate()
             return nil, "No known words. Mark some words as known in /wl config first."
         end
 
+        -- Apply recently-asked cooldown
+        local cooldownWindow = getCooldownWindow(#knownPool)
+        knownPool = filterCooldown(knownPool, cooldownWindow)
+
         local idx = math.random(1, #knownPool)
         selected = knownPool[idx]
     end
@@ -264,6 +323,10 @@ function QG:Generate()
     local wordEntry = selected.entry
     local displayType = selected.displayType
     local language = selected.languageAdapter
+
+    -- Record this word as recently asked (cooldown tracking)
+    local selectedKey = selected.language .. ":" .. selected.dataset .. ":" .. wordId
+    recordQuestion(selectedKey)
 
     -- Set active language/dataset for this question (for compatibility)
     WowLingoSavedVars.activeLanguage = selected.language
@@ -291,8 +354,7 @@ function QG:Generate()
         end
     end
 
-    local excludeKey = selected.language .. ":" .. selected.dataset .. ":" .. wordId
-    local distractors = pickDistractors(correctAnswer, excludeKey, direction, displayType, knownDistractorsRequired, knownDistractorPool, wordPool)
+    local distractors = pickDistractors(correctAnswer, selectedKey, direction, displayType, knownDistractorsRequired, knownDistractorPool, wordPool)
 
     -- Combine correct answer with distractors and shuffle
     local options = {correctAnswer, distractors[1], distractors[2], distractors[3]}
