@@ -24,8 +24,8 @@ local FEEDBACK_DELAY = 1.0  -- Seconds to show feedback before next question
 -- Colors
 local COLOR_CORRECT = {0.2, 0.8, 0.2}     -- Green
 local COLOR_INCORRECT = {0.8, 0.2, 0.2}   -- Red
-local COLOR_DEFAULT = {0.3, 0.3, 0.3}     -- Gray
-local COLOR_HOVER = {0.4, 0.4, 0.5}       -- Light gray
+local COLOR_DEFAULT = {0.6, 0.6, 0.6}     -- Light gray
+local COLOR_HOVER = {0.7, 0.7, 0.75}      -- Lighter gray
 
 -- Frame references
 local quizFrame = nil
@@ -291,12 +291,6 @@ function UI:OnAnswerClick(index)
         end
     end
 
-    -- Optional: Play sound feedback
-    if isCorrect then
-        PlaySound(SOUNDKIT and SOUNDKIT.IG_QUEST_LOG_COMPLETE_QUEST or 878)
-    else
-        PlaySound(SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959)
-    end
 end
 
 -- Check if frame is shown
