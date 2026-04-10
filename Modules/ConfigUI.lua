@@ -17,7 +17,7 @@ DEFAULT_CHAT_FRAME:AddMessage("|cFF00FF00[WowLingo DEBUG]|r ConfigUI.lua loaded.
 local FRAME_WIDTH = 500
 local FRAME_HEIGHT = 550
 local ROW_HEIGHT = 24
-local VISIBLE_ROWS = 15
+local VISIBLE_ROWS = 13
 local PADDING = 12
 local TAB_HEIGHT = 28
 local CONTENT_TOP_OFFSET = 75  -- Below title and tabs
@@ -538,9 +538,9 @@ local function CreateVocabularyPanel(parent)
     searchLabel:SetPoint("RIGHT", searchBox, "LEFT", -5, 0)
     searchLabel:SetText("Search:")
 
-    -- Direction dropdown label
+    -- Direction dropdown label (row 2, left side)
     local dirLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    dirLabel:SetPoint("LEFT", searchBox, "RIGHT", 20, 0)
+    dirLabel:SetPoint("TOPLEFT", panel, "TOPLEFT", 10, -32)
     dirLabel:SetText("Direction:")
 
     -- Direction buttons (simple button-based dropdown alternative for Classic)
@@ -606,9 +606,9 @@ local function CreateVocabularyPanel(parent)
     end)
     panel.gradualCheckbox = gradualCb
 
-    -- Learning ratio control (shown next to Gradual checkbox)
+    -- Learning ratio control (row 2, right side — below Gradual checkbox)
     local ratioLabel = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    ratioLabel:SetPoint("RIGHT", gradualCb, "LEFT", -5, 0)
+    ratioLabel:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -30, -32)
     ratioLabel:SetText("New:")
 
     local ratioDisplay = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -654,7 +654,7 @@ local function CreateVocabularyPanel(parent)
     panel.UpdateRatioDisplay = UpdateRatioDisplay
 
     -- Column headers (will be updated dynamically)
-    local headerY = -35
+    local headerY = -60
     local headerCol1 = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerCol1:SetPoint("TOPLEFT", panel, "TOPLEFT", 30, headerY)
     headerCol1:SetText("Type 1")  -- Updated dynamically
@@ -676,8 +676,8 @@ local function CreateVocabularyPanel(parent)
 
     -- Scroll frame
     scrollFrame = CreateFrame("ScrollFrame", "WowLingoScrollFrame", panel, "FauxScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -55)
-    scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -24, 45)
+    scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -80)
+    scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -24, 72)
     scrollFrame:SetScript("OnVerticalScroll", function(self, offset)
         FauxScrollFrame_OnVerticalScroll(self, offset, ROW_HEIGHT, UpdateScrollFrame)
     end)
@@ -693,7 +693,7 @@ local function CreateVocabularyPanel(parent)
     local btnWidth = 100
 
     local markAllType1Btn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    markAllType1Btn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 5)
+    markAllType1Btn:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 35)
     markAllType1Btn:SetWidth(btnWidth)
     markAllType1Btn:SetHeight(24)
     markAllType1Btn:SetText("All Type1 ✓")  -- Updated dynamically
@@ -716,9 +716,11 @@ local function CreateVocabularyPanel(parent)
         UpdateScrollFrame()
     end)
 
-    -- Stats display
+    -- Stats display (own row below the buttons)
     local statsText = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statsText:SetPoint("BOTTOMLEFT", panel, "BOTTOMLEFT", 0, 10)
     statsText:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 10)
+    statsText:SetJustifyH("LEFT")
     panel.statsText = statsText
 
     tabPanels.vocabulary = panel
